@@ -18,12 +18,17 @@ import { THEMES, getCurrentTheme, applyTheme } from './util.theme.js';
 // Import i18n utilities
 // 导入国际化工具函数
 import { t, setLanguage, getCurrentLanguage, initI18n } from './util.i18n.js';
+// P3: dark mode (system-following) + local encrypted history
+import { applyDarkModeSetting } from './util.darkmode.js';
+import { clearAllLocalHistory } from './util.localHistory.js';
 // Default settings
 // 默认设置
 const DEFAULT_SETTINGS = {
 	notify: false,
 	sound: false,
-	theme: 'theme1'
+	theme: 'theme1',
+	darkMode: 'auto', // 'auto' 跟随系统 | 'light' | 'dark'
+	localHistory: false // 本地加密消息历史（可选，默认关闭）
 	// 注意：我们不设置默认语言，让系统自动检测浏览器语言
 	// Note: We don't set a default language, let the system auto-detect browser language
 };
@@ -50,13 +55,17 @@ function saveSettings(settings) {
 		notify,
 		sound,
 		theme,
-		language
+		language,
+		darkMode,
+		localHistory
 	} = settings;
 	localStorage.setItem('settings', JSON.stringify({
 		notify,
 		sound,
 		theme,
-		language
+		language,
+		darkMode,
+		localHistory
 	}))
 }
 
@@ -66,6 +75,9 @@ function applySettings(settings) {
 	// Initialize i18n with current language setting
 	// 根据当前语言设置初始化国际化
 	initI18n(settings);
+	// P3: apply dark mode (auto/light/dark)
+	// P3：应用深色模式设置
+	applyDarkModeSetting(settings.darkMode)
 }
 
 // Ask for browser notification permission
@@ -115,6 +127,38 @@ function setupSettingsPanel() {
 				</label>
 			</div>
 		</div>
+		<div class="settings-section">
+			<div class="settings-section-title">${t('settings.appearance_privacy', 'Appearance & Privacy')}</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.dark_mode', 'Dark Mode')}</div>
+				</div>
+				<div class="language-selector">
+					<select id="settings-dark-mode" class="language-select">
+						<option value="auto" ${settings.darkMode !== 'dark' && settings.darkMode !== 'light' ? 'selected' : ''}>${t('settings.dark_auto', 'Follow System')}</option>
+						<option value="light" ${settings.darkMode === 'light' ? 'selected' : ''}>${t('settings.dark_light', 'Light')}</option>
+						<option value="dark" ${settings.darkMode === 'dark' ? 'selected' : ''}>${t('settings.dark_dark', 'Dark')}</option>
+					</select>
+				</div>
+			</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.local_history', 'Local Encrypted History')}</div>
+					<div class="settings-item-desc">${t('settings.local_history_desc', 'Keep recent messages on this device, encrypted with the room password (AES-GCM). Nothing leaves your browser; cleared when you click the button below.')}</div>
+				</div>
+				<label class="switch">
+					<input type="checkbox" id="settings-local-history" ${settings.localHistory ? 'checked' : ''}>
+					<span class="slider"></span>
+				</label>
+			</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.clear_history', 'Clear Local History')}</div>
+					<div class="settings-item-desc">${t('settings.clear_history_desc', 'Delete all locally stored encrypted message history from this device.')}</div>
+				</div>
+				<button type="button" id="settings-clear-history" class="settings-danger-btn">${t('settings.clear_history_btn', 'Clear')}</button>
+			</div>
+		</div>
 				<div class="settings-section">
 			<div class="settings-section-title">${t('settings.language', 'Language Settings')}</div>
 			<div class="settings-item">
@@ -142,6 +186,9 @@ function setupSettingsPanel() {
 	`;	const notifyCheckbox = $('#settings-notify', settingsContent);
 	const soundCheckbox = $('#settings-sound', settingsContent);
 	const languageSelect = $('#settings-language', settingsContent);
+	const darkModeSelect = $('#settings-dark-mode', settingsContent);
+	const localHistoryCheckbox = $('#settings-local-history', settingsContent);
+	const clearHistoryBtn = $('#settings-clear-history', settingsContent);
 	
 	// Language select event handler
 	// 语言选择事件处理
@@ -210,6 +257,35 @@ function setupSettingsPanel() {
 		}
 		saveSettings(settings);
 		applySettings(settings)
+	});
+	// P3: dark mode select (auto/light/dark)
+	// P3：深色模式选择
+	on(darkModeSelect, 'change', e => {
+		settings.darkMode = e.target.value;
+		saveSettings(settings);
+		applySettings(settings)
+	});
+	// P3: local encrypted history toggle.
+	// Toggling ON derives memory-only keys for existing rooms (via event);
+	// toggling OFF simply stops appending — stored ciphertext stays until
+	// the user clicks Clear (explicit, visible, no silent deletion).
+	// P3：本地加密历史开关。开启时广播事件为已加入房间补派生密钥（仅内存）；
+	// 关闭时只停止追加，已存密文保留到用户显式点"清除"。
+	on(localHistoryCheckbox, 'change', e => {
+		settings.localHistory = e.target.checked;
+		saveSettings(settings);
+		applySettings(settings);
+		window.dispatchEvent(new CustomEvent('localHistorySettingChanged', {
+			detail: {
+				enabled: settings.localHistory
+			}
+		}))
+	});
+	// P3: one-click clear of all local encrypted history
+	// P3：一键清除所有本地加密历史
+	on(clearHistoryBtn, 'click', () => {
+		const removed = clearAllLocalHistory();
+		window.addSystemMsg && window.addSystemMsg(t('system.history_cleared', 'Local message history cleared (encrypted blobs removed).') + ` [${removed}]`)
 	});
 	// Theme selection event handlers
 	// 主题选择事件处理

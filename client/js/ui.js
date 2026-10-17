@@ -25,6 +25,8 @@ import {
 import {
 	updateChatInputStyle
 } from './chat.js';
+// P3: QR invite codes (qrcode-generator, MIT, zero deps — RULES.md invariant 6 vetted)
+import qrcode from 'qrcode-generator';
 
 // Utility functions for security and error handling
 // 安全和错误处理工具函数
@@ -133,18 +135,81 @@ function handleShareAction() {
 	const rd = roomsData[activeRoomIndex];
 	const roomName = rd.roomName.trim();
 	const password = rd.password || '';
-	
+
 	// Encrypt room name and password
 	const encryptedRoom = simpleEncrypt(roomName);
 	const encryptedPwd = password ? simpleEncrypt(password) : '';
-	
+
 	// Create share URL with encrypted data
 	let url = `${location.origin}${location.pathname}?r=${encodeURIComponent(encryptedRoom)}`;
 	if (encryptedPwd) {
 		url += `&p=${encodeURIComponent(encryptedPwd)}`;
 	}
-	
-	copyToClipboard(url, t('action.share_copied', 'Share link copied!'), t('action.copy_url_failed', 'Copy failed, url:'));
+
+	showShareModal(url);
+}
+
+// P3: share modal with QR invite code.
+// The QR encodes the same invite link (obfuscated r/p params, see README
+// security notes) — scanning it on another device joins the room directly.
+// P3：分享弹窗 + 二维码邀请。二维码编码与链接相同的邀请参数，扫码即可入房。
+function showShareModal(url) {
+	// remove any previous share modal
+	const prev = document.querySelector('.share-modal-overlay');
+	if (prev) prev.remove();
+
+	const overlay = document.createElement('div');
+	overlay.className = 'share-modal-overlay';
+
+	let qrSvg = '';
+	try {
+		// typeNumber 0 = auto-size, 'M' error correction — good for long URLs
+		const qr = qrcode(0, 'M');
+		qr.addData(url);
+		qr.make();
+		qrSvg = qr.createSvgTag({
+			cellSize: 4,
+			margin: 8,
+			scannable: true
+		})
+	} catch (error) {
+		console.error('QR generation failed:', error)
+	}
+
+	overlay.innerHTML = `
+		<div class="share-modal-container">
+			<div class="share-modal-header">
+				<h3>${t('action.share_title', 'Invite to Room')}</h3>
+				<button class="share-modal-close" type="button" aria-label="Close">&times;</button>
+			</div>
+			<div class="share-modal-body">
+				${qrSvg ? `<div class="share-qr-box">${qrSvg}</div><div class="share-qr-hint">${t('action.share_qr_hint', 'Scan to join this room')}</div>` : `<div class="share-qr-hint">${t('action.qr_failed', 'QR code unavailable — copy the link below.')}</div>`}
+				<div class="share-link-box" title="${escapeHTML(url)}">${escapeHTML(url)}</div>
+				<button class="share-copy-btn" type="button">${t('action.copy_link', 'Copy Link')}</button>
+			</div>
+		</div>
+	`;
+
+	document.body.appendChild(overlay);
+
+	const close = () => {
+		overlay.remove();
+		document.removeEventListener('keydown', escHandler)
+	};
+	overlay.addEventListener('click', (e) => {
+		if (e.target === overlay) close()
+	});
+	const closeBtn = overlay.querySelector('.share-modal-close');
+	if (closeBtn) closeBtn.addEventListener('click', close);
+	const copyBtn = overlay.querySelector('.share-copy-btn');
+	if (copyBtn) copyBtn.addEventListener('click', () => {
+		copyToClipboard(url, t('action.share_copied', 'Share link copied!'), t('action.copy_url_failed', 'Copy failed, url:'))
+	});
+	// ESC to close
+	const escHandler = (e) => {
+		if (e.key === 'Escape') close()
+	};
+	document.addEventListener('keydown', escHandler)
 }
 
 // Handle exit action

@@ -5,7 +5,7 @@
   "main": "worker/index.js",
   "scripts": {
     "build": "vite build",
-    "test": "node test-crypto.mjs",
+    "test": "node test-crypto.mjs && node test-localHistory.mjs",
     "dev": " wrangler dev",
     "deploy": " wrangler deploy",
     "publish": " wrangler publish",
@@ -40,6 +40,7 @@
     "elliptic": "^6.6.1",
     "emoji-picker-element": "^1.26.3",
     "fflate": "^0.8.2",
-    "js-sha256": "^0.11.0"
+    "js-sha256": "^0.11.0",
+    "qrcode-generator": "^2.0.4"
   }
 }

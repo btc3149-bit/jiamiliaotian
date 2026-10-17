@@ -26,6 +26,9 @@ import {
 import {
 	t
 } from './util.i18n.js';
+import {
+	appendLocalHistory
+} from './util.localHistory.js';
 
 // Render the chat area
 // 渲染聊天区域
@@ -51,7 +54,8 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 	let ts = isHistory ? timestamp : (timestamp || Date.now());
 	if (!ts) return;
 	if (!isHistory && activeRoomIndex >= 0) {
-		roomsData[activeRoomIndex].messages.push({
+		const rdMe = roomsData[activeRoomIndex];
+		const entryMe = {
 			type: 'me',
 			text,
 			msgType,
@@ -60,6 +64,14 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 			reactions: (meta && meta.reactions) || null,
 			mentions: (meta && meta.mentions) || null,
 			mentionsMe: (meta && meta.mentionsMe) || false
+		};
+		rdMe.messages.push(entryMe);
+		// P3: opt-in encrypted local history (no-op unless enabled + key derived)
+		appendLocalHistory(rdMe, {
+			type: 'me',
+			text,
+			msgType,
+			timestamp: ts
 		})
 	}	const chatArea = $id('chat-area');
 	if (!chatArea) return;

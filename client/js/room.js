@@ -27,6 +27,11 @@ import {
 	createElement
 } from './util.dom.js';
 import { t } from './util.i18n.js';
+import {
+	setupRoomHistory,
+	loadLocalHistory,
+	appendLocalHistory
+} from './util.localHistory.js';
 let roomsData = [];
 let activeRoomIndex = -1;
 
@@ -180,6 +185,16 @@ export function joinRoom(userName, roomName, password, modal = null, onResult) {
 	roomsData.push(newRd);
 	const idx = roomsData.length - 1;
 	switchRoom(idx);
+	// P3: opt-in encrypted local history — derive the memory-only key, then
+	// decrypt and prepend any stored messages (best-effort, never blocks chat).
+	setupRoomHistory(newRd, roomName, password).then((channelHash) => {
+		if (!channelHash) return;
+		return loadLocalHistory(roomName, password, channelHash).then((entries) => {
+			if (!entries.length) return;
+			newRd.messages = entries.concat(newRd.messages);
+			if (activeRoomIndex === idx) renderChatArea()
+		})
+	}).catch(() => { /* history is best-effort */ });
 	const sidebarUsername = $id('sidebar-username');
 	if (sidebarUsername) sidebarUsername.textContent = userName;
 	setSidebarAvatar(userName);
@@ -415,17 +430,26 @@ export function handleClientMessage(idx, msg) {
 	// Add message to messages array for chat history (keep message id so
 	// reactions can target it; mentions carried in content layer)
 	const mentionsMe = Array.isArray(msg.mentions) && newRd.myId && msg.mentions.indexOf(newRd.myId) !== -1;
+	const tsOther = Date.now();
 	roomsData[idx].messages.push({
 		type: 'other',
 		text: msg.data,
 		userName: realUserName,
 		avatar: realUserName,
 		msgType: msgType,
-		timestamp: Date.now(),
+		timestamp: tsOther,
 		id: msg.id || null,
 		reactions: null,
 		mentions: Array.isArray(msg.mentions) && msg.mentions.length ? msg.mentions : null,
 		mentionsMe: mentionsMe
+	});
+	// P3: opt-in encrypted local history (no-op unless enabled + key derived)
+	appendLocalHistory(newRd, {
+		type: 'other',
+		text: msg.data,
+		userName: realUserName,
+		msgType: msgType,
+		timestamp: tsOther
 	});
 
 	// Only add message to chat display if it's for the active room
@@ -508,4 +532,38 @@ window.addEventListener('updateSidebarUsername', () => {
 			setSidebarAvatar(rd.myUserName);
 		}
 	}
+});
+// ==================== P3: local history events ====================
+// React to settings-side changes so already-joined rooms stay in sync.
+// 设置面板的开关/清除事件 → 已加入房间同步内存状态。
+
+window.addEventListener('localHistoryCleared', () => {
+	roomsData.forEach(rd => {
+		if (rd) rd.historyBuffer = []
+	})
+});
+
+window.addEventListener('localHistorySettingChanged', (e) => {
+	const enabled = e && e.detail && e.detail.enabled;
+	roomsData.forEach((rd, idx) => {
+		if (!rd || !rd.password || !rd.roomName) return;
+		if (enabled && !rd.historyKey) {
+			// turning ON: derive the memory-only key, then load what's stored
+			setupRoomHistory(rd, rd.roomName, rd.password).then((channelHash) => {
+				if (!channelHash) return;
+				return loadLocalHistory(rd.roomName, rd.password, channelHash).then((entries) => {
+					if (entries.length && !rd.historyLoaded) {
+						rd.historyLoaded = true;
+						rd.messages = entries.concat(rd.messages);
+						if (activeRoomIndex === idx) renderChatArea()
+					}
+				})
+			}).catch(() => { /* best-effort */ })
+		}
+		if (!enabled) {
+			// turning OFF: drop the key so appends become no-ops; stored
+			// ciphertext is kept until the user explicitly clicks Clear.
+			rd.historyKey = null
+		}
+	})
 });
