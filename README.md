@@ -1,4 +1,4 @@
-# NodeCrypt
+# 加米辽田
 
 🌐 **[English README](README_EN.md)**
 
@@ -7,7 +7,7 @@
 ### 一键部署到 Cloudflare Workers
 
 点击下方按钮即可一键部署到 Cloudflare Workers：
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button?projectName=NodeCrypt)](https://deploy.workers.cloudflare.com/?url=https://github.com/shuaiplus/nodecrypt)
+[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button?projectName=NodeCrypt)](https://deploy.workers.cloudflare.com/?url=https://github.com/btc3149-bit/jiamiliaotian)
 
 - 构建命令：npm run build
 - 部署命令：npm run deploy
@@ -15,7 +15,7 @@
 
 ## 📝 项目简介
 
-NodeCrypt 是一个真正的端到端加密聊天系统，实现完全的零知识架构。整个系统设计确保服务器、网络中间人、甚至系统管理员都无法获取任何明文消息内容。所有加密和解密操作都在客户端本地进行，服务器仅作为加密数据的盲中继。
+加米辽田是一个真正的端到端加密聊天系统，实现完全的零知识架构。整个系统设计确保服务器、网络中间人、甚至系统管理员都无法获取任何明文消息内容。所有加密和解密操作都在客户端本地进行，服务器仅作为加密数据的盲中继。
 
 ### 系统架构
 - **前端**：ES6+ 模块化 JavaScript，无框架依赖
@@ -156,8 +156,11 @@ sequenceDiagram
 ---
 ## Star History
 
-[![Star History Chart](https://star-history.dera.page/svg?repos=shuaiplus/NodeCrypt&type=Timeline)](https://star-history.dera.page/#shuaiplus/NodeCrypt&Timeline)
 
-**NodeCrypt** - 真正的端到端加密通信 🔐
+**加米辽田** - 真正的端到端加密通信 🔐
 
 *"在数字时代，加密是保护隐私的最后一道防线"*
+
+---
+
+> 致谢：本项目基于 [NodeCrypt](https://github.com/shuaiplus/NodeCrypt)（ISC License）架构与代码发展而来。
