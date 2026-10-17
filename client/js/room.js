@@ -9,7 +9,11 @@ import {
 	addSystemMsg,
 	updateChatInputStyle,
 	toggleReactionLocal,
-	renderReactions
+	renderReactions,
+	updateTypingIndicator,
+	saveDraft,
+	loadDraft,
+	clearDraft
 } from './chat.js';
 import {
 	renderMainHeader,
@@ -41,7 +45,8 @@ export function getNewRoomData() {
 		knownUserIds: new Set(),
 		unreadCount: 0,
 		privateChatTargetId: null,
-		privateChatTargetName: null
+		privateChatTargetName: null,
+		typingUsers: {} // clientId -> timestamp of last typing signal
 	}
 }
 
@@ -59,7 +64,78 @@ export function switchRoom(index) {
 	renderMainHeader();
 	renderUserList(false);
 	renderChatArea();
-	updateChatInputStyle()
+	updateChatInputStyle();
+	// P2: restore this room's local draft into the input box, then refresh
+	// the typing indicator for the room we just switched to.
+	// P2：把该房间的本地草稿填回输入框，并刷新输入中指示。
+	const inputEl = document.querySelector('.input-message-input');
+	if (inputEl) {
+		const channelHash = rd.chat && rd.chat.credentials ? rd.chat.credentials.channel : '';
+		inputEl.innerHTML = loadDraft(channelHash);
+		inputEl.dispatchEvent(new Event('input', {
+			bubbles: true
+		}))
+	}
+	renderTypingForRoom(index)
+}
+
+// ==================== P2: typing indicator handling ====================
+// Record an incoming typing signal and refresh the indicator. Entries
+// auto-expire after TYPING_TIMEOUT ms without a refresh — the signal
+// carries no content, so there is nothing to persist or render beyond
+// the member's name.
+const TYPING_TIMEOUT = 5000;
+
+// Handle an incoming typing signal from a room member.
+export function handleClientTyping(idx, msg) {
+	const rd = roomsData[idx];
+	if (!rd || !msg || !msg.clientId) return;
+	if (msg.clientId === rd.myId) return; // ignore self
+	rd.typingUsers = rd.typingUsers || {};
+	rd.typingUsers[msg.clientId] = {
+		username: msg.username || '',
+		timestamp: Date.now()
+	};
+	if (idx === activeRoomIndex) renderTypingForRoom(idx);
+	// schedule expiry check
+	setTimeout(() => expireTyping(idx), TYPING_TIMEOUT + 250)
+}
+
+// Drop stale typing entries and refresh the indicator if needed.
+function expireTyping(idx) {
+	const rd = roomsData[idx];
+	if (!rd || !rd.typingUsers) return;
+	const now = Date.now();
+	let changed = false;
+	for (const clientId in rd.typingUsers) {
+		if (now - rd.typingUsers[clientId].timestamp > TYPING_TIMEOUT) {
+			delete rd.typingUsers[clientId];
+			changed = true
+		}
+	}
+	if (changed && idx === activeRoomIndex) renderTypingForRoom(idx)
+}
+
+// Render the typing indicator for room `idx` from its typing map.
+function renderTypingForRoom(idx) {
+	const rd = roomsData[idx];
+	if (!rd) return;
+	if (idx !== activeRoomIndex) {
+		updateTypingIndicator([]);
+		return
+	}
+	const names = Object.values(rd.typingUsers || {})
+		.filter(entry => Date.now() - entry.timestamp <= TYPING_TIMEOUT)
+		.map(entry => entry.username);
+	updateTypingIndicator(names)
+}
+
+// Called when a member leaves so their typing entry does not linger.
+export function clearTypingUser(idx, clientId) {
+	const rd = roomsData[idx];
+	if (!rd || !rd.typingUsers || !rd.typingUsers[clientId]) return;
+	delete rd.typingUsers[clientId];
+	if (idx === activeRoomIndex) renderTypingForRoom(idx)
 }
 
 // Set the sidebar avatar
@@ -135,7 +211,8 @@ export function joinRoom(userName, roomName, password, modal = null, onResult) {
 		onClientList: (list, selfId) => handleClientList(idx, list, selfId),
 		onClientLeft: (clientId) => handleClientLeft(idx, clientId),
 		onClientMessage: (msg) => handleClientMessage(idx, msg),
-		onClientReaction: (r) => handleClientReaction(idx, r)
+		onClientReaction: (r) => handleClientReaction(idx, r),
+		onClientTyping: (msg) => handleClientTyping(idx, msg)
 	};
 	const chatInst = new window.NodeCrypt(window.config, callbacks);
 	roomsData[idx].chat = chatInst;
@@ -234,6 +311,7 @@ export function handleClientLeft(idx, clientId) {
 	if (activeRoomIndex === idx) addSystemMsg(msg, true);
 	rd.userList = rd.userList.filter(u => u.clientId !== clientId);
 	delete rd.userMap[clientId];
+	clearTypingUser(idx, clientId); // P2: don't let a departed member's typing state linger
 	if (activeRoomIndex === idx) {
 		renderUserList(false);
 		renderMainHeader()

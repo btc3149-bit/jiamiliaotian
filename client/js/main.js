@@ -10,6 +10,11 @@ import {
 	downloadFile
 } from './util.file.js';
 
+// P2: 拖拽文件直投上传模态框 / Drop files straight into the upload modal
+import {
+	handleExternalDrop
+} from './util.fileUpload.js';
+
 // 从 util.image.js 中导入图片处理功能
 // Import image processing functions from util.image.js
 import {
@@ -63,7 +68,9 @@ import {
 	setupImagePreview,    // 设置图片预览功能 / Setup image preview
 	setupInputPlaceholder, // 设置输入框的占位提示 / Setup placeholder for input box
 	setupReactionsUI,     // 表情回应交互（事件委托）/ Reaction UI (event delegation)
-	autoGrowInput         // 自动调整输入框高度 / Auto adjust input height
+	autoGrowInput,        // 自动调整输入框高度 / Auto adjust input height
+	saveDraft,            // P2: 保存房间草稿 / Save per-room draft
+	clearDraft            // P2: 清除房间草稿 / Clear per-room draft
 } from './chat.js';
 
 // 从 ui.js 中导入 UI 界面相关的功能
@@ -170,6 +177,26 @@ window.addEventListener('DOMContentLoaded', () => {
 	// 设置图片粘贴功能
 	// Setup image paste functionality
 	const imagePasteHandler = setupImagePaste('.input-message-input');
+
+	// ==================== P2: typing signal + local draft ====================
+	// 输入事件三合一（各自节流/防抖）：
+	// - typing 信号：sendTyping 内部 3s 节流，空内容走 E2EE 信封
+	// - 草稿保存：400ms 防抖写 sessionStorage（仅本标签页会话）
+	// - （placeholder 检查已由 setupInputPlaceholder 处理）
+	let draftTimer = null;
+	input.addEventListener('input', () => {
+		const rd = roomsData[activeRoomIndex];
+		if (rd && rd.chat) {
+			if (typeof rd.chat.sendTyping === 'function') {
+				rd.chat.sendTyping() // throttled inside / 内部已节流
+			}
+			if (rd.chat.credentials) {
+				const channelHash = rd.chat.credentials.channel;
+				clearTimeout(draftTimer);
+				draftTimer = setTimeout(() => saveDraft(channelHash, input.innerHTML), 400)
+			}
+		}
+	});
 	
 	if (input) {
 		input.focus(); // 自动聚焦 / Auto focus
@@ -290,6 +317,10 @@ window.addEventListener('DOMContentLoaded', () => {
 
 			// 清空输入框并触发 input 事件
 			// Clear input and trigger input event
+			const rdSent = roomsData[activeRoomIndex];
+			if (rdSent && rdSent.chat && rdSent.chat.credentials) {
+				clearDraft(rdSent.chat.credentials.channel) // P2: 已发送，草稿即焚
+			}
 			input.innerHTML = ''; // 清空输入框内容 / Clear input field content
 			if (imagePasteHandler && typeof imagePasteHandler.refreshPlaceholder === 'function') {
 				imagePasteHandler.refreshPlaceholder(); // 更新 placeholder 状态
@@ -445,4 +476,16 @@ document.addEventListener('drop', (e) => {
 	e.preventDefault();
 	dragCounter = 0;
 	hasTriggeredAttach = false;
+	// P2: 落下的文件直接进上传模态框，不再只是"打开模态框然后丢失文件"。
+	// P2: route dropped files straight into the upload modal instead of just
+	// opening it and losing the payload.
+	const dropped = e.dataTransfer ? Array.from(e.dataTransfer.files || []) : [];
+	if (dropped.length === 0) return;
+	if (!handleExternalDrop(dropped)) {
+		const attachBtn = document.querySelector('.chat-attach-btn');
+		if (attachBtn) {
+			attachBtn.click(); // opens the modal synchronously / 同步打开模态框
+			setTimeout(() => handleExternalDrop(dropped), 0)
+		}
+	}
 });

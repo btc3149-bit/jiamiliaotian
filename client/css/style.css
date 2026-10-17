@@ -1976,3 +1976,44 @@ h2{
   outline: 2px solid rgba(74, 157, 248, .45);
   outline-offset: -2px;
 }
+
+/* ==================== P2: typing indicator ==================== */
+.typing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 16px 6px;
+  font-size: 12px;
+  color: #8a8f98;
+  min-height: 22px;
+}
+.typing-indicator:empty {
+  display: none;
+}
+.typing-dots {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+}
+.typing-dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #8a8f98;
+  opacity: .4;
+  animation: typing-bounce 1.2s infinite ease-in-out;
+}
+.typing-dots i:nth-child(2) {
+  animation-delay: .18s;
+}
+.typing-dots i:nth-child(3) {
+  animation-delay: .36s;
+}
+@keyframes typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: .4; }
+  30% { transform: translateY(-3px); opacity: 1; }
+}
+.typing-names {
+  font-weight: 600;
+  color: #6b7078;
+}

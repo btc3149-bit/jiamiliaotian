@@ -31,6 +31,8 @@ const LANGUAGES = {
 			'ui.message': 'Message',
 			'ui.private_message_to': 'Private Message to',
 			'ui.me': ' (me)',
+			'ui.typing': 'is typing…',
+			'ui.typing_more': ' and others',
 			'ui.anonymous': 'Anonymous',
 			'ui.start_private_chat': 'Select for private chat',
 			
@@ -155,6 +157,8 @@ const LANGUAGES = {
 			'ui.message': '消息',
 			'ui.private_message_to': '私信给',
 			'ui.me': '（我）',
+			'ui.typing': '正在输入…',
+			'ui.typing_more': ' 等人',
 			'ui.anonymous': '匿名用户',
 			'ui.start_private_chat': '选择用户开始私信',
 			

@@ -43,6 +43,8 @@ class NodeCrypt {
 			onClientSecured: callbacks.onClientSecured || null,
 			onClientList: callbacks.onClientList || null,
 			onClientMessage: callbacks.onClientMessage || null,
+			onClientReaction: callbacks.onClientReaction || null,
+			onClientTyping: callbacks.onClientTyping || null,
 		};
 		try {
 			this.clientEc = new elliptic('curve25519')
@@ -401,6 +403,21 @@ class NodeCrypt {
 				}
 				return
 			}
+			if (clientDecrypted.a === 't') {
+				// Typing signal: carries no content at all, only "someone is typing".
+				// 内容为零的输入中信号，不携带任何文本。
+				if (this.callbacks.onClientTyping) {
+					try {
+						this.callbacks.onClientTyping({
+							clientId: serverDecrypted.c,
+							username: this.channel[serverDecrypted.c].username
+						})
+					} catch (error) {
+						this.logEvent('onMessage-client-typing-callback', error, 'error')
+					}
+				}
+				return
+			}
 		}
 	}
 
@@ -615,6 +632,45 @@ class NodeCrypt {
 				return (true)
 			} catch (error) {
 				this.logEvent('sendReaction', error, 'error')
+			}
+		}
+		return (false)
+	}
+
+	// Broadcast a typing signal to all channel members (throttled to one
+	// signal per TYPING_SEND_INTERVAL). The signal is an empty content-layer
+	// action ('t') inside the existing E2EE 'w' envelope — it carries no text
+	// and the server relays it opaquely, exactly like any other payload.
+	// 向全频道广播输入中信号（节流）。空内容 action（'t'）走既有 E2EE 信封，服务器盲转发。
+	sendTyping() {
+		if (this.serverShared) {
+			try {
+				const now = Date.now();
+				if (this.lastTypingSent && (now - this.lastTypingSent) < 3000) {
+					return (true) // throttled / 节流窗口内直接吞掉
+				}
+				this.lastTypingSent = now;
+				let payloads = {};
+				for (const clientId in this.channel) {
+					if (this.channel[clientId].shared && this.channel[clientId].username) {
+						payloads[clientId] = this.encryptClientMessage({
+							a: 't'
+						}, this.channel[clientId].shared);
+					}
+				}
+				if (Object.keys(payloads).length > 0) {
+					const payload = this.encryptServerMessage({
+						a: 'w',
+						p: payloads,
+					}, this.serverShared);
+					if (!this.isOpen() || payload.length === 0 || payload.length > (8 * 1024 * 1024)) {
+						return (false)
+					}
+					this.connection.send(payload)
+				}
+				return (true)
+			} catch (error) {
+				this.logEvent('sendTyping', error, 'error')
 			}
 		}
 		return (false)

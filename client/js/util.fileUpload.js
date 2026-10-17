@@ -136,16 +136,28 @@ export function showFileUploadModal(onSend) {
 
 	onSendCallback = onSend;
 	selectedFiles.clear();
-	
+
 	uploadModal = createUploadModal();
 	document.body.appendChild(uploadModal);
-	
+
 	setupModalEvents();
-	
+
 	// Focus and animation
 	setTimeout(() => {
 		addClass(uploadModal, 'show');
 	}, 10);
+}
+
+// P2: accept files dropped anywhere on the page while the modal is open.
+// Returns true if handled (modal open), false if the caller must open the
+// modal first (then retry).
+// P2：模态框打开时接收页面上任意位置的拖放文件。返回 false 表示调用方需先打开模态框。
+export function handleExternalDrop(files) {
+	if (!uploadModal) return false;
+	const list = Array.from(files || []);
+	if (list.length === 0) return true;
+	addFiles(list);
+	return true
 }
 
 // Hide file upload modal
