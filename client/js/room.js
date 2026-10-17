@@ -7,7 +7,9 @@ import {
 import {
 	renderChatArea,
 	addSystemMsg,
-	updateChatInputStyle
+	updateChatInputStyle,
+	toggleReactionLocal,
+	renderReactions
 } from './chat.js';
 import {
 	renderMainHeader,
@@ -132,7 +134,8 @@ export function joinRoom(userName, roomName, password, modal = null, onResult) {
 		onClientSecured: (user) => handleClientSecured(idx, user),
 		onClientList: (list, selfId) => handleClientList(idx, list, selfId),
 		onClientLeft: (clientId) => handleClientLeft(idx, clientId),
-		onClientMessage: (msg) => handleClientMessage(idx, msg)
+		onClientMessage: (msg) => handleClientMessage(idx, msg),
+		onClientReaction: (r) => handleClientReaction(idx, r)
 	};
 	const chatInst = new window.NodeCrypt(window.config, callbacks);
 	roomsData[idx].chat = chatInst;
@@ -237,6 +240,20 @@ export function handleClientLeft(idx, clientId) {
 	}
 }
 
+// Handle incoming emoji reaction (content-layer action, E2EE; server never sees it)
+// 处理收到的表情回应（内容层 action，端到端加密；服务器不可见）
+export function handleClientReaction(idx, r) {
+	const rd = roomsData[idx];
+	if (!rd || !r || !r.targetId || !r.emoji) return;
+	// SECURITY: whitelist-validate remote fields before touching state/DOM
+	if (!/^[A-Za-z0-9]{8,32}$/.test(r.targetId)) return;
+	if (typeof r.emoji !== 'string' || !r.emoji || r.emoji.length > 16) return;
+	toggleReactionLocal(rd, r.targetId, r.emoji, r.clientId);
+	if (activeRoomIndex === idx) {
+		renderReactions(r.targetId)
+	}
+}
+
 // Handle client message event
 // 处理客户端消息事件
 export function handleClientMessage(idx, msg) {
@@ -317,20 +334,30 @@ export function handleClientMessage(idx, msg) {
 		realUserName = newRd.userMap[msg.clientId].userName || newRd.userMap[msg.clientId].username || newRd.userMap[msg.clientId].name;
 	}
 
-	// Add message to messages array for chat history
+	// Add message to messages array for chat history (keep message id so
+	// reactions can target it; mentions carried in content layer)
+	const mentionsMe = Array.isArray(msg.mentions) && newRd.myId && msg.mentions.indexOf(newRd.myId) !== -1;
 	roomsData[idx].messages.push({
 		type: 'other',
 		text: msg.data,
 		userName: realUserName,
 		avatar: realUserName,
 		msgType: msgType,
-		timestamp: Date.now()
+		timestamp: Date.now(),
+		id: msg.id || null,
+		reactions: null,
+		mentions: Array.isArray(msg.mentions) && msg.mentions.length ? msg.mentions : null,
+		mentionsMe: mentionsMe
 	});
 
 	// Only add message to chat display if it's for the active room
 	if (activeRoomIndex === idx) {
 		if (window.addOtherMsg) {
-			window.addOtherMsg(msg.data, realUserName, realUserName, false, msgType);
+			window.addOtherMsg(msg.data, realUserName, realUserName, false, msgType, null, {
+				id: msg.id || null,
+				mentions: Array.isArray(msg.mentions) ? msg.mentions : [],
+				mentionsMe: mentionsMe
+			});
 		}
 	} else {
 		roomsData[idx].unreadCount = (roomsData[idx].unreadCount || 0) + 1;
@@ -339,7 +366,12 @@ export function handleClientMessage(idx, msg) {
 
 	const notificationMsgType = msgType.includes('_private') ? `private ${msgType.split('_')[0]}` : msgType;
 	if (window.notifyMessage) {
-		window.notifyMessage(newRd.roomName, notificationMsgType, msg.data, realUserName);
+		// A direct @mention gets its own, more intrusive notification
+		if (mentionsMe) {
+			window.notifyMessage(newRd.roomName, 'mention', msg.data, realUserName);
+		} else {
+			window.notifyMessage(newRd.roomName, notificationMsgType, msg.data, realUserName);
+		}
 	}
 }
 

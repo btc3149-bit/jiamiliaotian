@@ -370,14 +370,33 @@ class NodeCrypt {
 			if (clientDecrypted.a === 'm' && this.isString(clientDecrypted.t) && (this.isString(clientDecrypted.d) || this.isObject(clientDecrypted.d))) {
 				if (this.callbacks.onClientMessage) {
 					try {
+						// mentions: optional array of clientIds (content-layer field)
 						this.callbacks.onClientMessage({
 							clientId: serverDecrypted.c,
 							username: this.channel[serverDecrypted.c].username,
 							type: clientDecrypted.t,
-							data: clientDecrypted.d
+							data: clientDecrypted.d,
+							id: this.isString(clientDecrypted.id) ? clientDecrypted.id : null,
+							mentions: Array.isArray(clientDecrypted.m) ? clientDecrypted.m.filter(m => this.isString(m)) : []
 						})
 					} catch (error) {
 						this.logEvent('onMessage-client-message-callback', error, 'error')
+					}
+				}
+				return
+			}
+			if (clientDecrypted.a === 'r' && this.isString(clientDecrypted.id) && this.isString(clientDecrypted.e)) {
+				// Emoji reaction on a message (content-layer action; server never sees it)
+				if (this.callbacks.onClientReaction) {
+					try {
+						this.callbacks.onClientReaction({
+							clientId: serverDecrypted.c,
+							username: this.channel[serverDecrypted.c].username,
+							targetId: clientDecrypted.id,
+							emoji: clientDecrypted.e
+						})
+					} catch (error) {
+						this.logEvent('onMessage-client-reaction-callback', error, 'error')
 					}
 				}
 				return
@@ -513,17 +532,30 @@ class NodeCrypt {
 
 	// Send a message to all channels
 	// 向所有频道发送消息
-	sendChannelMessage(type, data) {
+	// Generate a random message id (16 hex chars). Random, carries no
+	// metadata — used only to target reactions.
+	// 生成随机消息 ID（16 位十六进制）。纯随机、不携带任何元数据，仅用于表情回应定位。
+	genMessageId() {
+		const bytes = crypto.getRandomValues(new Uint8Array(8));
+		return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
+	}
+
+	sendChannelMessage(type, data, extras) {
 		if (this.serverShared) {
 			try {
+				// extras: optional additional content-layer fields (e.g. mentions).
+				// SECURITY: extras travel inside the E2EE content layer only;
+				// the server relays them opaquely and can never read them.
+				const messageId = this.genMessageId();
 				let payloads = {};
 				for (const clientId in this.channel) {
 					if (this.channel[clientId].shared && this.channel[clientId].username) {
-						payloads[clientId] = this.encryptClientMessage({
+						payloads[clientId] = this.encryptClientMessage(Object.assign({
 							a: 'm',
 							t: type,
-							d: data
-						}, this.channel[clientId].shared);
+							d: data,
+							id: messageId
+						}, extras || {}), this.channel[clientId].shared);
 						if (payloads[clientId].length === 0) {
 							return (false)
 						}
@@ -539,9 +571,50 @@ class NodeCrypt {
 					}
 					this.connection.send(payload)
 				}
-				return (true)
+				return (messageId)
 			} catch (error) {
 				this.logEvent('sendChannelMessage', error, 'error')
+			}
+		}
+		return (false)
+	}
+
+	// Broadcast an emoji reaction on a message to all channel members.
+	// The reaction travels inside the existing E2EE content layer as its own
+	// action type ('r') — the server relays it opaquely, zero protocol change.
+	// 向全频道广播消息表情回应。回应作为独立 action（'r'）走既有 E2EE 内容层，服务器盲转发。
+	sendReaction(targetMessageId, emoji) {
+		if (this.serverShared) {
+			try {
+				// SECURITY: validate locally before sending; receivers re-validate.
+				const safeId = String(targetMessageId || '');
+				const safeEmoji = String(emoji || '');
+				if (!/^[A-Za-z0-9]{8,32}$/.test(safeId) || !safeEmoji || safeEmoji.length > 16) {
+					return (false)
+				}
+				let payloads = {};
+				for (const clientId in this.channel) {
+					if (this.channel[clientId].shared && this.channel[clientId].username) {
+						payloads[clientId] = this.encryptClientMessage({
+							a: 'r',
+							id: safeId,
+							e: safeEmoji
+						}, this.channel[clientId].shared);
+					}
+				}
+				if (Object.keys(payloads).length > 0) {
+					const payload = this.encryptServerMessage({
+						a: 'w',
+						p: payloads,
+					}, this.serverShared);
+					if (!this.isOpen() || payload.length === 0 || payload.length > (8 * 1024 * 1024)) {
+						return (false)
+					}
+					this.connection.send(payload)
+				}
+				return (true)
+			} catch (error) {
+				this.logEvent('sendReaction', error, 'error')
 			}
 		}
 		return (false)

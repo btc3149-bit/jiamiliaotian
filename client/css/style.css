@@ -1870,3 +1870,109 @@ h2{
   margin-top: 2px;
   user-select: text;
 }
+
+/* ==================== P1: emoji reactions + @mentions ==================== */
+
+/* Hover action button on message bubbles */
+.bubble .bubble-actions {
+  display: none;
+  position: absolute;
+  top: -14px;
+  right: 8px;
+  z-index: 5;
+}
+.bubble.me,
+.bubble.other {
+  position: relative;
+}
+.bubble:hover .bubble-actions {
+  display: block;
+}
+.msg-react-btn {
+  border: 1px solid var(--border-color, #d9dde3);
+  background: var(--bg-primary, #fff);
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 8px;
+  cursor: pointer;
+  opacity: .75;
+  transition: opacity .15s ease, transform .15s ease;
+}
+.msg-react-btn:hover {
+  opacity: 1;
+  transform: scale(1.08);
+}
+
+/* Aggregated reaction chips row */
+.msg-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.msg-reactions:empty {
+  display: none;
+}
+.msg-reaction-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: var(--bg-secondary, #f1f3f5);
+  border: 1px solid transparent;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s ease, border-color .15s ease;
+}
+.msg-reaction-chip:hover {
+  background: var(--bg-hover, #e9ecef);
+}
+.msg-reaction-chip.mine {
+  border-color: #4a9df8;
+  background: rgba(74, 157, 248, .12);
+}
+
+/* Floating reaction picker */
+.reaction-picker {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--bg-primary, #fff);
+  border: 1px solid var(--border-color, #d9dde3);
+  border-radius: 18px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, .14);
+}
+.reaction-option {
+  border: none;
+  background: transparent;
+  font-size: 20px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: transform .12s ease, background .12s ease;
+}
+.reaction-option:hover {
+  transform: scale(1.25);
+  background: var(--bg-hover, #f1f3f5);
+}
+
+/* @mention highlight (injected after DOMPurify, escaped content only) */
+.mention {
+  color: #4a9df8;
+  font-weight: 600;
+  background: rgba(74, 157, 248, .10);
+  border-radius: 4px;
+  padding: 0 2px;
+}
+
+/* Bubble that mentions me */
+.bubble.mentioned {
+  outline: 2px solid rgba(74, 157, 248, .45);
+  outline-offset: -2px;
+}

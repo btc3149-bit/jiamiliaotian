@@ -38,15 +38,16 @@ export function renderChatArea() {
 	}
 	chatArea.innerHTML = '';
 	roomsData[activeRoomIndex].messages.forEach(m => {
-		if (m.type === 'me') addMsg(m.text, true, m.msgType || 'text', m.timestamp);
+		const meta = { id: m.id, reactions: m.reactions, mentions: m.mentions, mentionsMe: m.mentionsMe };
+		if (m.type === 'me') addMsg(m.text, true, m.msgType || 'text', m.timestamp, meta);
 		else if (m.type === 'system') addSystemMsg(m.text, true, m.timestamp);
-		else addOtherMsg(m.text, m.userName, m.avatar, true, m.msgType || 'text', m.timestamp)
+		else addOtherMsg(m.text, m.userName, m.avatar, true, m.msgType || 'text', m.timestamp, meta)
 	})
 }
 
 // Add a message to the chat area
 // 添加消息到聊天区域
-export function addMsg(text, isHistory = false, msgType = 'text', timestamp = null) {
+export function addMsg(text, isHistory = false, msgType = 'text', timestamp = null, meta = null) {
 	let ts = isHistory ? timestamp : (timestamp || Date.now());
 	if (!ts) return;
 	if (!isHistory && activeRoomIndex >= 0) {
@@ -54,11 +55,15 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 			type: 'me',
 			text,
 			msgType,
-			timestamp: ts
+			timestamp: ts,
+			id: (meta && meta.id) || null,
+			reactions: (meta && meta.reactions) || null,
+			mentions: (meta && meta.mentions) || null,
+			mentionsMe: (meta && meta.mentionsMe) || false
 		})
 	}	const chatArea = $id('chat-area');
 	if (!chatArea) return;
-	let className = 'bubble me' + (msgType.includes('_private') ? ' private-message' : '');
+	let className = 'bubble me' + (msgType.includes('_private') ? ' private-message' : '') + ((meta && meta.mentionsMe) ? ' mentioned' : '');
 	const date = new Date(ts);
 	const time = date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0');	let contentHtml = '';	if (msgType === 'image' || msgType === 'image_private') {
 		// Handle image messages (can contain both text and images)
@@ -108,18 +113,27 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 		// Add file-bubble class for special timestamp positioning
 		className += ' file-bubble';
 	} else {
-		contentHtml = textToHTML(text)
+		contentHtml = textToHTML(text);
+		if (meta && meta.mentions && meta.mentions.length) {
+			contentHtml = highlightMentionsInHtml(contentHtml, resolveMentionNames(meta.mentions));
+		}
 	}
+	const safeMid = (meta && meta.id && /^[A-Za-z0-9]{8,32}$/.test(meta.id)) ? meta.id : null;
+	const reactionBarHtml = safeMid
+		? `<span class="bubble-actions"><button type="button" class="msg-react-btn" data-mid="${safeMid}" aria-label="react">😊+</button></span><span class="msg-reactions" data-mid="${safeMid}"></span>`
+		: '';
 	const div = createElement('div', {
-		class: className
-	}, `<span class="bubble-content">${contentHtml}</span><span class="bubble-meta">${time}</span>`);
+		class: className,
+		...(safeMid ? { 'data-mid': safeMid } : {})
+	}, `<span class="bubble-content">${contentHtml}</span>${reactionBarHtml}<span class="bubble-meta">${time}</span>`);
 	chatArea.appendChild(div);
+	if (safeMid) renderReactions(safeMid);
 	chatArea.scrollTop = chatArea.scrollHeight
 }
 
 // Add a message from another user to the chat area
 // 添加来自其他用户的消息到聊天区域
-export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, msgType = 'text', timestamp = null) {
+export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, msgType = 'text', timestamp = null, meta = null) {
 	if (!userName && activeRoomIndex >= 0) {
 		const rd = roomsData[activeRoomIndex];
 		// 优先使用文件消息自带的 userName 字段
@@ -181,8 +195,15 @@ export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, 
 	} else if (msgType === 'file' || msgType === 'file_private') {
 		// Handle file messages
 		contentHtml = renderFileMessage(msg, false);	} else {
-		contentHtml = textToHTML(msg)
+		contentHtml = textToHTML(msg);
+		if (meta && meta.mentions && meta.mentions.length) {
+			contentHtml = highlightMentionsInHtml(contentHtml, resolveMentionNames(meta.mentions));
+		}
 	}
+	const safeMid = (meta && meta.id && /^[A-Za-z0-9]{8,32}$/.test(meta.id)) ? meta.id : null;
+	const reactionBarHtml = safeMid
+		? `<span class="bubble-actions"><button type="button" class="msg-react-btn" data-mid="${safeMid}" aria-label="react">😊+</button></span><span class="msg-reactions" data-mid="${safeMid}"></span>`
+		: '';
 	const safeUserName = escapeHTML(userName);
 	const date = new Date(ts);
 	const time = date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0');
@@ -193,7 +214,10 @@ export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, 
 	if (msgType === 'file' || msgType === 'file_private') {
 		bubbleClasses += ' file-bubble';
 	}
-	bubbleWrap.innerHTML = `<span class="avatar"></span><div class="bubble-other-main"><div class="${bubbleClasses}"><div class="bubble-other-name">${safeUserName}</div><span class="bubble-content">${contentHtml}</span><span class="bubble-meta">${time}</span></div></div>`;
+	if (meta && meta.mentionsMe) {
+		bubbleClasses += ' mentioned';
+	}
+	bubbleWrap.innerHTML = `<span class="avatar"></span><div class="bubble-other-main"><div class="${bubbleClasses}"${safeMid ? ` data-mid="${safeMid}"` : ''}><div class="bubble-other-name">${safeUserName}</div><span class="bubble-content">${contentHtml}</span>${reactionBarHtml}<span class="bubble-meta">${time}</span></div></div>`;
 	const svg = createAvatarSVG(userName);
 	const avatarEl = $('.avatar', bubbleWrap);
 	if (avatarEl) {
@@ -201,6 +225,7 @@ export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, 
 		avatarEl.innerHTML = cleanSvg
 	}
 	chatArea.appendChild(bubbleWrap);
+	if (safeMid) renderReactions(safeMid);
 	chatArea.scrollTop = chatArea.scrollHeight
 }
 
@@ -481,4 +506,162 @@ export function setupInputPlaceholder() {
 	checkEmpty();
 	autoGrowInput();
 	updateChatInputStyle()
+}
+
+// ==================== P1 conveniences: emoji reactions + @mentions ====================
+// P1 便利功能：表情回应 + @提及
+// SECURITY: everything below travels inside the existing E2EE content layer.
+// The server only ever relays opaque ciphertext and is completely unchanged.
+
+// Whitelisted reaction emojis (rendered as text nodes, still escaped upstream)
+const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🎉'];
+
+// Resolve clientIds -> display names for mention highlighting
+// 将 clientId 列表解析为显示名（用于高亮）
+function resolveMentionNames(mentions) {
+	const rd = roomsData[activeRoomIndex];
+	const names = [];
+	if (!rd || !Array.isArray(mentions)) return names;
+	for (const cid of mentions) {
+		const u = rd.userMap && rd.userMap[cid];
+		const name = u ? (u.userName || u.username || u.name || '') : '';
+		if (name && names.indexOf(name) === -1) names.push(name)
+	}
+	return names
+}
+
+// Wrap @Name tokens in sanitized HTML with .mention spans.
+// Runs AFTER DOMPurify: our injected span only contains escaped text.
+// 在 DOMPurify 之后注入 .mention span（内容为转义文本，安全）
+function highlightMentionsInHtml(html, names) {
+	if (!html || !names || !names.length) return html;
+	for (const name of names) {
+		const esc = escapeHTML(name);
+		if (!esc) continue;
+		html = html.split('@' + esc).join('<span class="mention">@' + esc + '</span>')
+	}
+	return html
+}
+
+// Find a message entry by id in the active room
+function findMessageById(rd, mid) {
+	return rd.messages.find(m => m.id === mid) || null
+}
+
+// Toggle a reaction locally (no network). clientId empty = own reaction.
+// 本地切换回应状态（不发网络请求）
+export function toggleReactionLocal(rd, mid, emoji, clientId) {
+	if (!rd || !mid || !emoji) return false;
+	const msg = findMessageById(rd, mid);
+	if (!msg) return false;
+	if (!msg.reactions || typeof msg.reactions !== 'object') msg.reactions = {};
+	const list = Array.isArray(msg.reactions[emoji]) ? msg.reactions[emoji] : (msg.reactions[emoji] = []);
+	const idx = list.indexOf(clientId);
+	if (idx === -1) list.push(clientId);
+	else list.splice(idx, 1);
+	if (list.length === 0) delete msg.reactions[emoji];
+	return true
+}
+
+// Re-render the reaction chips row under a message
+// 重绘某条消息下方的回应栏
+export function renderReactions(mid) {
+	const rd = roomsData[activeRoomIndex];
+	if (!rd || !mid || !/^[A-Za-z0-9]{8,32}$/.test(mid)) return;
+	const row = document.querySelector('#chat-area .msg-reactions[data-mid="' + mid + '"]');
+	if (!row) return;
+	const msg = findMessageById(rd, mid);
+	if (!msg || !msg.reactions || !Object.keys(msg.reactions).length) {
+		row.innerHTML = '';
+		return
+	}
+	let html = '';
+	for (const emoji in msg.reactions) {
+		const clients = msg.reactions[emoji];
+		if (!Array.isArray(clients) || !clients.length) continue;
+		const names = clients.map(cid => {
+			const u = rd.userMap && rd.userMap[cid];
+			return (u && (u.userName || u.username || u.name)) || t('ui.anonymous', 'Anonymous')
+		});
+		const mine = rd.myId && clients.indexOf(rd.myId) !== -1;
+		// emoji + names are escaped before interpolation (RULES.md invariant 5)
+		html += `<span class="msg-reaction-chip${mine ? ' mine' : ''}" data-emoji="${escapeHTML(emoji)}" title="${escapeHTML(names.join(', '))}">${escapeHTML(emoji)} ${clients.length}</span>`
+	}
+	row.innerHTML = html
+}
+
+// Floating emoji picker for reactions
+// 表情回应浮动选框
+function showReactionPicker(mid, anchorEl) {
+	hideReactionPicker();
+	const picker = createElement('div', { class: 'reaction-picker', 'data-mid': mid });
+	picker.innerHTML = REACTION_EMOJIS.map(e =>
+		`<button type="button" class="reaction-option" data-emoji="${escapeHTML(e)}">${escapeHTML(e)}</button>`
+	).join('');
+	document.body.appendChild(picker);
+	const rect = anchorEl.getBoundingClientRect();
+	const pw = 216, ph = 44;
+	picker.style.left = Math.max(8, Math.min(window.innerWidth - pw - 8, rect.left - pw / 2)) + 'px';
+	picker.style.top = Math.max(8, rect.top - ph - 8) + 'px';
+	setTimeout(() => {
+		on(document, 'click', hideReactionPickerOnOutside)
+	}, 0)
+}
+
+function hideReactionPickerOnOutside(e) {
+	const picker = document.querySelector('.reaction-picker');
+	if (!picker) return;
+	if (picker.contains(e.target)) return;
+	hideReactionPicker()
+}
+
+function hideReactionPicker() {
+	const picker = document.querySelector('.reaction-picker');
+	if (picker) picker.remove();
+	off(document, 'click', hideReactionPickerOnOutside)
+}
+
+// Delegated handlers on the chat area (attached once)
+// 聊天区事件委托（只挂一次）
+export function setupReactionsUI() {
+	const chatArea = $id('chat-area');
+	if (!chatArea || chatArea.dataset.reactionsSetup === '1') return;
+	chatArea.dataset.reactionsSetup = '1';
+	on(chatArea, 'click', function(e) {
+		const rd = roomsData[activeRoomIndex];
+		if (!rd || !rd.chat) return;
+		const reactBtn = e.target.closest('.msg-react-btn');
+		if (reactBtn) {
+			e.stopPropagation();
+			showReactionPicker(reactBtn.dataset.mid, reactBtn);
+			return
+		}
+		const chip = e.target.closest('.msg-reaction-chip');
+		if (chip) {
+			e.stopPropagation();
+			const bubble = chip.closest('[data-mid]');
+			if (!bubble) return;
+			const mid = bubble.dataset.mid;
+			const emoji = chip.dataset.emoji || '';
+			if (!mid || !emoji) return;
+			if (rd.chat.sendReaction(mid, emoji)) {
+				toggleReactionLocal(rd, mid, emoji, rd.myId);
+				renderReactions(mid)
+			}
+			return
+		}
+		const option = e.target.closest('.reaction-option');
+		if (option) {
+			e.stopPropagation();
+			const picker = option.closest('.reaction-picker');
+			const mid = picker ? picker.dataset.mid : null;
+			const emoji = option.dataset.emoji || '';
+			hideReactionPicker();
+			if (!mid || !emoji) return;
+			if (rd.chat.sendReaction(mid, emoji)) {
+				toggleReactionLocal(rd, mid, emoji, rd.myId);
+				renderReactions(mid)
+			}
+		}
+	})
 }

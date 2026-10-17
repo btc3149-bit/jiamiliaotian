@@ -62,6 +62,7 @@ import {
 	addSystemMsg,         // 添加系统消息 / Add a system message
 	setupImagePreview,    // 设置图片预览功能 / Setup image preview
 	setupInputPlaceholder, // 设置输入框的占位提示 / Setup placeholder for input box
+	setupReactionsUI,     // 表情回应交互（事件委托）/ Reaction UI (event delegation)
 	autoGrowInput         // 自动调整输入框高度 / Auto adjust input height
 } from './chat.js';
 
@@ -138,6 +139,7 @@ window.addEventListener('DOMContentLoaded', () => {
 	// 初始化辅助功能和界面设置
 	// Initialize autofill, input placeholders, and menus
 	autofillRoomPwd();	setupInputPlaceholder();
+	setupReactionsUI();
 	setupMoreBtnMenu();
 	setupImagePreview();	setupEmojiPicker();
 	// 由于我们已经在DOM加载前预先初始化了语言设置，这里不需要重复初始化
@@ -183,6 +185,26 @@ window.addEventListener('DOMContentLoaded', () => {
 	
 	// 发送消息的统一函数
 	// Unified function to send messages
+	// Parse @Name tokens in text against current room members -> clientIds.
+	// Mention data travels inside the E2EE content layer only (RULES.md invariant 1).
+	function parseMentions(text, rd) {
+		const ids = [];
+		if (!text || !rd || !rd.userMap) return ids;
+		const tokens = new Set();
+		const re = /@([^\s@]{1,32})/gu;
+		let m;
+		while ((m = re.exec(text))) tokens.add(m[1]);
+		for (const token of tokens) {
+			const lower = token.toLowerCase();
+			for (const cid in rd.userMap) {
+				const u = rd.userMap[cid];
+				const name = u ? (u.userName || u.username || u.name || '') : '';
+				if (name && name.toLowerCase() === lower && ids.indexOf(cid) === -1) ids.push(cid);
+			}
+		}
+		return ids;
+	}
+
 	function sendMessage() {
 		const text = input.innerText.trim(); // 获取输入的文本 / Get input text
 		const images = imagePasteHandler ? imagePasteHandler.getCurrentImages() : []; // 获取所有图片
@@ -207,7 +229,8 @@ window.addEventListener('DOMContentLoaded', () => {
 						const clientMessagePayload = {
 							a: 'm',
 							t: 'image_private',
-							d: messageContent
+							d: messageContent,
+							id: rd.chat.genMessageId()
 						};
 						const encryptedClientMessage = rd.chat.encryptClientMessage(clientMessagePayload, targetClient.shared);
 						const serverRelayPayload = {
@@ -216,15 +239,15 @@ window.addEventListener('DOMContentLoaded', () => {
 							c: rd.privateChatTargetId
 						};
 						const encryptedMessageForServer = rd.chat.encryptServerMessage(serverRelayPayload, rd.chat.serverShared);						rd.chat.sendMessage(encryptedMessageForServer);
-						addMsg(messageContent, false, 'image_private');
+						addMsg(messageContent, false, 'image_private', null, { id: clientMessagePayload.id });
 					} else {
 						addSystemMsg(`${t('system.private_message_failed', 'Cannot send private message to')} ${rd.privateChatTargetName}. ${t('system.user_not_connected', 'User might not be fully connected.')}`)
 					}
 				} else {
 					// 公共频道图片消息发送
 					// Send image message to public channel
-					rd.chat.sendChannelMessage('image', messageContent);
-					addMsg(messageContent, false, 'image');
+					const imgMid = rd.chat.sendChannelMessage('image', messageContent);
+					addMsg(messageContent, false, 'image', null, { id: typeof imgMid === 'string' ? imgMid : null });
 				}
 				
 				imagePasteHandler.clearImages(); // 清除所有图片预览
@@ -239,7 +262,8 @@ window.addEventListener('DOMContentLoaded', () => {
 						const clientMessagePayload = {
 							a: 'm',
 							t: 'text_private',
-							d: text
+							d: text,
+							id: rd.chat.genMessageId()
 						};
 						const encryptedClientMessage = rd.chat.encryptClientMessage(clientMessagePayload, targetClient.shared);
 						const serverRelayPayload = {
@@ -248,17 +272,22 @@ window.addEventListener('DOMContentLoaded', () => {
 							c: rd.privateChatTargetId
 						};
 						const encryptedMessageForServer = rd.chat.encryptServerMessage(serverRelayPayload, rd.chat.serverShared);
-						rd.chat.sendMessage(encryptedMessageForServer);					addMsg(text, false, 'text_private');
+						rd.chat.sendMessage(encryptedMessageForServer);					addMsg(text, false, 'text_private', null, { id: clientMessagePayload.id });
 					} else {
 						addSystemMsg(`${t('system.private_message_failed', 'Cannot send private message to')} ${rd.privateChatTargetName}. ${t('system.user_not_connected', 'User might not be fully connected.')}`)
 					}
 				} else {
-					// 公共频道消息发送
-					// Send public message
-					rd.chat.sendChannelMessage('text', text);
-					addMsg(text);				}
+					// 公共频道消息发送（携带 @提及，走 E2EE 内容层）
+					// Send public message (with @mentions, inside E2EE content layer)
+					const mentionIds = parseMentions(text, rd);
+					const mid = rd.chat.sendChannelMessage('text', text, mentionIds.length ? { m: mentionIds } : undefined);
+					addMsg(text, false, 'text', null, {
+						id: typeof mid === 'string' ? mid : null,
+						mentions: mentionIds
+					});
+				}
 			}
-			
+
 			// 清空输入框并触发 input 事件
 			// Clear input and trigger input event
 			input.innerHTML = ''; // 清空输入框内容 / Clear input field content
@@ -295,7 +324,8 @@ window.addEventListener('DOMContentLoaded', () => {
 						const clientMessagePayload = {
 							a: 'm',
 							t: msgWithUser.type + '_private',
-							d: msgWithUser
+							d: msgWithUser,
+							id: rd.chat.genMessageId()
 						};
 						const encryptedClientMessage = rd.chat.encryptClientMessage(clientMessagePayload, targetClient.shared);
 						const serverRelayPayload = {
@@ -308,18 +338,18 @@ window.addEventListener('DOMContentLoaded', () => {
 						
 						// 添加到自己的聊天记录
 						if (msgWithUser.type === 'file_start') {
-							addMsg(msgWithUser, false, 'file_private');
+							addMsg(msgWithUser, false, 'file_private', null, { id: clientMessagePayload.id });
 						}					} else {
 						addSystemMsg(`${t('system.private_file_failed', 'Cannot send private file to')} ${rd.privateChatTargetName}. ${t('system.user_not_connected', 'User might not be fully connected.')}`)
 					}
 				} else {
 					// 公共频道文件发送
 					// Send file to public channel
-					rd.chat.sendChannelMessage(msgWithUser.type, msgWithUser);
-					
+					const fileMid = rd.chat.sendChannelMessage(msgWithUser.type, msgWithUser);
+
 					// 添加到自己的聊天记录
 					if (msgWithUser.type === 'file_start') {
-						addMsg(msgWithUser, false, 'file');
+						addMsg(msgWithUser, false, 'file', null, { id: typeof fileMid === 'string' ? fileMid : null });
 					}
 				}
 			}		}
