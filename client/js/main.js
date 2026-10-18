@@ -37,6 +37,11 @@ import {
 } from './util.settings.js';
 import { t, updateStaticTexts } from './util.i18n.js';
 
+// P1-A: PWA 支持（SW 注册 + 安装提示捕获）
+import {
+	initPWA
+} from './util.pwa.js';
+
 // 从 util.theme.js 中导入主题功能函数
 // Import theme functions from util.theme.js
 import {
@@ -489,3 +494,6 @@ document.addEventListener('drop', (e) => {
 		}
 	}
 });
+
+// P1-A: 初始化 PWA（Service Worker 只缓存静态应用壳，绝不缓存消息内容）
+initPWA();

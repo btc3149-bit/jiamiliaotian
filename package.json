@@ -5,6 +5,7 @@
   "main": "worker/index.js",
   "scripts": {
     "build": "vite build",
+    "icons": "node scripts/gen-icons.mjs",
     "test": "node test-crypto.mjs && node test-localHistory.mjs",
     "dev": " wrangler dev",
     "deploy": " wrangler deploy",
