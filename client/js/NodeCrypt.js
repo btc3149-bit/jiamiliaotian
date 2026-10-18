@@ -47,7 +47,9 @@ class NodeCrypt {
 			onClientTyping: callbacks.onClientTyping || null,
 			onClientEdit: callbacks.onClientEdit || null,
 			onClientDelete: callbacks.onClientDelete || null,
-			onClientReadReceipt: callbacks.onClientReadReceipt || null
+			onClientReadReceipt: callbacks.onClientReadReceipt || null,
+			onClientSync: callbacks.onClientSync || null,
+			onClientReplay: callbacks.onClientReplay || null
 		};
 		try {
 			this.clientEc = new elliptic('curve25519')
@@ -485,6 +487,69 @@ class NodeCrypt {
 				}
 				return
 			}
+			if (clientDecrypted.a === 'sync') {
+				// P2: peer replay sync request. A reconnecting peer asks the
+				// room to replay messages sent while it was offline. Carries
+				// only a watermark timestamp + a few known ids — no content.
+				// P2: 同伴重播请求。重连方请房间补发其离线期间的消息，仅携带
+				// 水位时间戳 + 少量已知 id，不携带任何内容。
+				const since = (typeof clientDecrypted.since === 'number' && clientDecrypted.since >= 0 && clientDecrypted.since <= Date.now() + 60000) ? Math.floor(clientDecrypted.since) : 0;
+				const ids = Array.isArray(clientDecrypted.ids)
+					? clientDecrypted.ids.filter((mid) => this.isString(mid) && /^[A-Za-z0-9]{8,32}$/.test(mid)).slice(0, 20)
+					: [];
+				if (this.callbacks.onClientSync) {
+					try {
+						this.callbacks.onClientSync({
+							clientId: serverDecrypted.c,
+							username: this.channel[serverDecrypted.c].username,
+							since,
+							ids
+						})
+					} catch (error) {
+						this.logEvent('onMessage-client-sync-callback', error, 'error')
+					}
+				}
+				return
+			}
+			if (clientDecrypted.a === 'rs' && Array.isArray(clientDecrypted.msgs)) {
+				// P2: peer replay batch (unicast response to 'sync'). Entries are
+				// strictly sanitized — text/image only, hard size caps, id whitelist.
+				// P2: 同伴重播批次（对 'sync' 的单播应答）。逐条严格消毒——仅文本/图片，
+				// 硬性大小上限，id 白名单。
+				const msgs = [];
+				for (const e of clientDecrypted.msgs.slice(0, 50)) {
+					if (!this.isObject(e)) continue;
+					if (!this.isString(e.id) || !/^[A-Za-z0-9]{8,32}$/.test(e.id)) continue;
+					if ((e.t !== 'text' && e.t !== 'image') || !this.isString(e.d) || e.d.length === 0) continue;
+					if (e.t === 'text' && e.d.length > 10000) continue;
+					if (e.t === 'image' && e.d.length > 300000) continue;
+					msgs.push({
+						id: e.id,
+						t: e.t,
+						d: e.d,
+						ts: (typeof e.ts === 'number' && e.ts >= 0) ? Math.floor(e.ts) : 0,
+						u: this.isString(e.u) ? e.u.slice(0, 64) : '',
+						self: e.self === true,
+						m: Array.isArray(e.m) ? e.m.filter((x) => this.isString(x) && /^[A-Za-z0-9]{8,32}$/.test(x)).slice(0, 20) : [],
+						q: (this.isObject(e.q) && this.isString(e.q.x) && e.q.x.length <= 300)
+							? { u: this.isString(e.q.u) ? e.q.u.slice(0, 64) : '', x: e.q.x }
+							: null,
+						ttl: (e.ttl === 30 || e.ttl === 300 || e.ttl === 3600) ? e.ttl : null
+					});
+				}
+				if (msgs.length > 0 && this.callbacks.onClientReplay) {
+					try {
+						this.callbacks.onClientReplay({
+							clientId: serverDecrypted.c,
+							username: this.channel[serverDecrypted.c].username,
+							msgs
+						})
+					} catch (error) {
+						this.logEvent('onMessage-client-replay-callback', error, 'error')
+					}
+				}
+				return
+			}
 		}
 	}
 
@@ -859,6 +924,98 @@ class NodeCrypt {
 				return (true)
 			} catch (error) {
 				this.logEvent('sendReadReceipts', error, 'error')
+			}
+		}
+		return (false)
+	}
+
+	// Broadcast a replay sync request (P2). After a reconnect, the client
+	// asks all peers to replay messages sent while it was offline. Payload
+	// carries a watermark timestamp + a few known message ids only.
+	// 广播重播请求（P2）。重连后请所有同伴补发本端离线期间的消息，载荷仅含
+	// 水位时间戳 + 少量已知消息 id。
+	sendSyncRequest(since, knownIds) {
+		if (this.serverShared) {
+			try {
+				const s = (typeof since === 'number' && since >= 0 && since <= Date.now() + 60000) ? Math.floor(since) : 0;
+				const ids = Array.isArray(knownIds)
+					? knownIds.filter((mid) => this.isString(mid) && /^[A-Za-z0-9]{8,32}$/.test(mid)).slice(0, 20)
+					: [];
+				let payloads = {};
+				for (const clientId in this.channel) {
+					if (this.channel[clientId].shared && this.channel[clientId].username) {
+						payloads[clientId] = this.encryptClientMessage({
+							a: 'sync',
+							since: s,
+							ids
+						}, this.channel[clientId].shared);
+					}
+				}
+				if (Object.keys(payloads).length > 0) {
+					const payload = this.encryptServerMessage({
+						a: 'w',
+						p: payloads,
+					}, this.serverShared);
+					if (!this.isOpen() || payload.length === 0 || payload.length > (8 * 1024 * 1024)) {
+						return (false)
+					}
+					this.connection.send(payload)
+				}
+				return (true)
+			} catch (error) {
+				this.logEvent('sendSyncRequest', error, 'error')
+			}
+		}
+		return (false)
+	}
+
+	// Unicast a replay batch (P2) to one reconnecting peer via the 'c' relay
+	// path. Entries are sanitized before encryption; receivers re-validate.
+	// 单播重播批次（P2）给指定重连方，走 'c' 中继路径。加密前先消毒，接收端再验。
+	sendSyncReplay(targetId, entries) {
+		if (this.serverShared) {
+			try {
+				const target = this.channel[targetId];
+				if (!target || !target.shared || !target.username) return (false);
+				if (!Array.isArray(entries) || entries.length === 0) return (false);
+				const msgs = [];
+				for (const e of entries.slice(0, 50)) {
+					if (!this.isObject(e)) continue;
+					if (!this.isString(e.id) || !/^[A-Za-z0-9]{8,32}$/.test(e.id)) continue;
+					if ((e.t !== 'text' && e.t !== 'image') || !this.isString(e.d) || e.d.length === 0) continue;
+					if (e.t === 'text' && e.d.length > 10000) continue;
+					if (e.t === 'image' && e.d.length > 300000) continue;
+					msgs.push({
+						id: e.id,
+						t: e.t,
+						d: e.d,
+						ts: (typeof e.ts === 'number' && e.ts >= 0) ? Math.floor(e.ts) : 0,
+						u: this.isString(e.u) ? e.u.slice(0, 64) : '',
+						self: e.self === true,
+						m: Array.isArray(e.m) ? e.m.filter((x) => this.isString(x) && /^[A-Za-z0-9]{8,32}$/.test(x)).slice(0, 20) : [],
+						q: (this.isObject(e.q) && this.isString(e.q.x) && e.q.x.length <= 300)
+							? { u: this.isString(e.q.u) ? e.q.u.slice(0, 64) : '', x: e.q.x.slice(0, 300) }
+							: null,
+						ttl: (e.ttl === 30 || e.ttl === 300 || e.ttl === 3600) ? e.ttl : null
+					});
+				}
+				if (msgs.length === 0) return (false);
+				const clientMessagePayload = this.encryptClientMessage({
+					a: 'rs',
+					msgs
+				}, target.shared);
+				const serverRelayPayload = this.encryptServerMessage({
+					a: 'c',
+					p: clientMessagePayload,
+					c: targetId
+				}, this.serverShared);
+				if (!this.isOpen() || serverRelayPayload.length === 0 || serverRelayPayload.length > (8 * 1024 * 1024)) {
+					return (false)
+				}
+				this.sendMessage(serverRelayPayload);
+				return (true)
+			} catch (error) {
+				this.logEvent('sendSyncReplay', error, 'error')
 			}
 		}
 		return (false)

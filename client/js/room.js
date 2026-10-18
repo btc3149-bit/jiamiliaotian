@@ -213,6 +213,11 @@ export function joinRoom(userName, roomName, password, modal = null, onResult) {
 	const callbacks = {
 		onServerClosed: () => {
 			setStatus('Node connection closed');
+			// P2: mark this room as needing a peer-replay sync once the
+			// connection is re-established and the client list refreshes.
+			// P2: 标记本房间需要在重连成功（client list 刷新）后发起同伴重播。
+			const rdClosed = roomsData[idx];
+			if (rdClosed) rdClosed.needsSync = true;
 			// P1-C: honest reconnect notice. Server persists nothing (RULES
 			// invariant), so messages sent during the gap cannot be backfilled
 			// from the server — tell the user instead of silently losing them.
@@ -249,7 +254,9 @@ export function joinRoom(userName, roomName, password, modal = null, onResult) {
 		onClientTyping: (msg) => handleClientTyping(idx, msg),
 		onClientEdit: (r) => handleClientEdit(idx, r),
 		onClientDelete: (r) => handleClientDelete(idx, r),
-		onClientReadReceipt: (r) => handleClientReadReceipt(idx, r)
+		onClientReadReceipt: (r) => handleClientReadReceipt(idx, r),
+		onClientSync: (r) => handleClientSync(idx, r),
+		onClientReplay: (r) => handleClientReplay(idx, r)
 	};
 	const chatInst = new window.NodeCrypt(window.config, callbacks);
 	roomsData[idx].chat = chatInst;
@@ -299,6 +306,26 @@ export function handleClientList(idx, list, selfId) {
 	if (!rd._lastPushReport || (nowTs - rd._lastPushReport) > 5 * 60 * 1000) {
 		rd._lastPushReport = nowTs;
 		reportPushSubscription(rd.chat);
+	}
+	// P2: peer replay sync — if the connection dropped and is back, ask
+	// online peers to replay what was missed. Only when at least one other
+	// peer holds the room key; the flag survives until peers exist.
+	// P2: 同伴重播——断线重连后向在线同伴请求补发缺失消息。需至少一名持房间
+	// 密钥的同伴；无同伴时保留标记等下次列表刷新。
+	if (rd.needsSync && rd.isInitialized) {
+		if (list.length > 1 && rd.chat && typeof rd.chat.sendSyncRequest === 'function') {
+			rd.needsSync = false;
+			let since = 0;
+			const knownIds = [];
+			for (const m of rd.messages) {
+				if (!m || !m.id) continue;
+				if (typeof m.timestamp === 'number' && m.timestamp > since) since = m.timestamp;
+				if (knownIds.length < 20) knownIds.push(m.id);
+			}
+			try {
+				rd.chat.sendSyncRequest(since, knownIds);
+			} catch (_e) { /* sync is best-effort */ }
+		}
 	}
 }
 
@@ -428,6 +455,107 @@ export function handleClientReadReceipt(idx, r) {
 	void changed; // DOM updated per-id above; history re-render picks up entry.read
 }
 
+// P2: answer a reconnecting peer's sync request by replaying matching
+// messages from this client's in-memory buffer (text/image only, capped).
+// Content flows peer-to-peer inside the room key; the server stays blind.
+// P2: 应答重连方的同步请求，从本端内存缓冲重播匹配消息（仅文本/图片，有上限）。
+// 内容仅在持房间密钥的同伴间流动，服务器全盲。
+export function handleClientSync(idx, r) {
+	const rd = roomsData[idx];
+	if (!rd || !r || !r.clientId || r.clientId === rd.myId) return;
+	if (!rd.chat || typeof rd.chat.sendSyncReplay !== 'function') return;
+	const since = (typeof r.since === 'number' && r.since >= 0) ? r.since : 0;
+	const known = new Set(Array.isArray(r.ids) ? r.ids : []);
+	const out = [];
+	for (const m of rd.messages) {
+		if (out.length >= 50) break;
+		if (!m || !m.id || known.has(m.id)) continue;
+		if (m.type === 'system' || m.burned || m.deleted) continue;
+		if (typeof m.timestamp !== 'number' || m.timestamp <= since) continue;
+		const mt = (m.msgType === 'image' || m.msgType === 'image_private') ? 'image' : (m.msgType === 'text' ? 'text' : null);
+		if (!mt) continue; // file transfers / unknown types cannot be replayed
+		if (typeof m.text !== 'string' || m.text.length === 0) continue;
+		if (mt === 'text' && m.text.length > 10000) continue;
+		if (mt === 'image' && m.text.length > 300000) continue;
+		out.push({
+			id: m.id,
+			t: mt,
+			d: m.text,
+			ts: m.timestamp,
+			u: m.type === 'me' ? (rd.myUserName || '') : (m.userName || ''),
+			self: m.type === 'me',
+			...(Array.isArray(m.mentions) && m.mentions.length ? { m: m.mentions.slice(0, 20) } : {}),
+			...(m.quote ? { q: m.quote } : {}),
+			...(m.ttl ? { ttl: m.ttl } : {})
+		});
+	}
+	if (out.length > 0) {
+		try {
+			rd.chat.sendSyncReplay(r.clientId, out);
+		} catch (_e) { /* replay is best-effort */ }
+	}
+}
+
+// P2: apply a replay batch received from a peer after reconnecting.
+// Dedupe by message id, append (entries are all newer than our watermark,
+// so chronological append is correct up to clock skew), persist to the
+// opt-in encrypted local history, re-render once.
+// P2: 应用重连后收到的重播批次。按消息 id 去重后顺序追加（重播条目全部晚于
+// 本端水位，时序正确），写入本地加密历史，最后统一重渲染一次。
+export function handleClientReplay(idx, r) {
+	const rd = roomsData[idx];
+	if (!rd || !r || !Array.isArray(r.msgs) || r.msgs.length === 0) return;
+	const existing = new Set(rd.messages.filter(m => m.id).map(m => m.id));
+	const batch = [];
+	for (const e of r.msgs.slice(0, 50)) {
+		if (!e || typeof e !== 'object') continue;
+		if (typeof e.id !== 'string' || !/^[A-Za-z0-9]{8,32}$/.test(e.id) || existing.has(e.id)) continue;
+		if ((e.t !== 'text' && e.t !== 'image') || typeof e.d !== 'string' || e.d.length === 0) continue;
+		if (e.t === 'text' && e.d.length > 10000) continue;
+		if (e.t === 'image' && e.d.length > 300000) continue;
+		const ts = (typeof e.ts === 'number' && e.ts > 0 && e.ts < Date.now() + 60000) ? e.ts : Date.now();
+		const realUserName = (typeof e.u === 'string' && e.u)
+			? e.u
+			: (e.self ? (rd.myUserName || '') : t('ui.anonymous', 'Anonymous'));
+		const entry = {
+			type: 'other',
+			text: e.d,
+			userName: realUserName,
+			avatar: realUserName,
+			msgType: e.t === 'image' ? 'image' : 'text',
+			timestamp: ts,
+			id: e.id,
+			reactions: null,
+			mentions: Array.isArray(e.m) && e.m.length ? e.m : null,
+			mentionsMe: Array.isArray(e.m) && rd.myId && e.m.indexOf(rd.myId) !== -1,
+			fromSync: true
+		};
+		if (e.q && typeof e.q.x === 'string') entry.quote = { u: typeof e.q.u === 'string' ? e.q.u : '', x: e.q.x };
+		if (e.ttl === 30 || e.ttl === 300 || e.ttl === 3600) entry.ttl = e.ttl;
+		existing.add(e.id);
+		batch.push(entry);
+	}
+	if (!batch.length) return;
+	for (const entry of batch) {
+		rd.messages.push(entry);
+		// opt-in encrypted local history (no-op unless enabled + key derived)
+		appendLocalHistory(rd, {
+			type: 'other',
+			text: entry.text,
+			userName: entry.userName,
+			msgType: entry.msgType,
+			timestamp: entry.timestamp,
+			id: entry.id,
+			ttl: entry.ttl
+		});
+	}
+	const msg = `${batch.length} ${t('system.sync_done', 'missed message(s) restored from peers')}`;
+	rd.messages.push({ type: 'system', text: msg });
+	if (activeRoomIndex === idx) {
+		renderChatArea(); // full re-render covers the batch + system note
+	}
+}
+
 // Handle client message event
 // 处理客户端消息事件
 export function handleClientMessage(idx, msg) {
@@ -510,6 +638,9 @@ export function handleClientMessage(idx, msg) {
 
 	// Add message to messages array for chat history (keep message id so
 	// reactions can target it; mentions carried in content layer)
+	// P2: dedupe — a live message can race with a peer replay of the same id
+	// P2: 去重——实时消息可能与同伴重播的同一 id 竞争
+	if (msg.id && roomsData[idx].messages.some(m => m.id === msg.id)) return;
 	const mentionsMe = Array.isArray(msg.mentions) && newRd.myId && msg.mentions.indexOf(newRd.myId) !== -1;
 	const tsOther = Date.now();
 	roomsData[idx].messages.push({
