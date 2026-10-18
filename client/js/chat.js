@@ -27,7 +27,8 @@ import {
 	t
 } from './util.i18n.js';
 import {
-	appendLocalHistory
+	appendLocalHistory,
+	purgeLocalHistory
 } from './util.localHistory.js';
 
 // Render the chat area
@@ -35,13 +36,15 @@ import {
 export function renderChatArea() {
 	const chatArea = $id('chat-area');
 	if (!chatArea) return;
+	// P1-B: stale reply/edit state must never leak across rooms
+	resetComposerState();
 	if (activeRoomIndex < 0 || !roomsData[activeRoomIndex]) {
 		chatArea.innerHTML = '';
 		return
 	}
 	chatArea.innerHTML = '';
 	roomsData[activeRoomIndex].messages.forEach(m => {
-		const meta = { id: m.id, reactions: m.reactions, mentions: m.mentions, mentionsMe: m.mentionsMe };
+		const meta = { id: m.id, reactions: m.reactions, mentions: m.mentions, mentionsMe: m.mentionsMe, quote: m.quote, ttl: m.ttl, edited: m.edited, deleted: m.deleted, burned: m.burned };
 		if (m.type === 'me') addMsg(m.text, true, m.msgType || 'text', m.timestamp, meta);
 		else if (m.type === 'system') addSystemMsg(m.text, true, m.timestamp);
 		else addOtherMsg(m.text, m.userName, m.avatar, true, m.msgType || 'text', m.timestamp, meta)
@@ -63,7 +66,13 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 			id: (meta && meta.id) || null,
 			reactions: (meta && meta.reactions) || null,
 			mentions: (meta && meta.mentions) || null,
-			mentionsMe: (meta && meta.mentionsMe) || false
+			mentionsMe: (meta && meta.mentionsMe) || false,
+			author: (rdMe && rdMe.myId) || null,
+			quote: (meta && meta.quote) || null,
+			ttl: (meta && meta.ttl) || null,
+			edited: false,
+			deleted: false,
+			burned: false
 		};
 		rdMe.messages.push(entryMe);
 		// P3: opt-in encrypted local history (no-op unless enabled + key derived)
@@ -71,13 +80,31 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 			type: 'me',
 			text,
 			msgType,
-			timestamp: ts
+			timestamp: ts,
+			id: (meta && meta.id) || null,
+			ttl: (meta && meta.ttl) || null
 		})
 	}	const chatArea = $id('chat-area');
 	if (!chatArea) return;
 	let className = 'bubble me' + (msgType.includes('_private') ? ' private-message' : '') + ((meta && meta.mentionsMe) ? ' mentioned' : '');
 	const date = new Date(ts);
-	const time = date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0');	let contentHtml = '';	if (msgType === 'image' || msgType === 'image_private') {
+	const time = date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0');
+	// P1-B: tombstone rendering for recalled / burned entries
+	const safeMidEarly = (meta && meta.id && /^[A-Za-z0-9]{8,32}$/.test(meta.id)) ? meta.id : null;
+	if (safeMidEarly && meta && (meta.deleted || meta.burned)) {
+		const tomb = createElement('div', {
+			class: className + ' recalled',
+			'data-mid': safeMidEarly
+		}, `<span class="bubble-content"><span class="msg-recalled">${escapeHTML(t(meta.burned ? 'ui.burned' : 'ui.recalled', meta.burned ? 'Message expired' : 'Message recalled'))}</span></span><span class="bubble-meta">${time}</span>`);
+		chatArea.appendChild(tomb);
+		chatArea.scrollTop = chatArea.scrollHeight;
+		return
+	}
+	// P1-B: reply-quote block (both fields remote-controlled → escaped)
+	const quoteHtml = (meta && meta.quote && meta.quote.x)
+		? `<span class="msg-quote"><span class="msg-quote-name">${escapeHTML(String(meta.quote.u || ''))}</span><span class="msg-quote-text">${escapeHTML(String(meta.quote.x).slice(0, 200))}</span></span>`
+		: '';
+	let contentHtml = '';	if (msgType === 'image' || msgType === 'image_private') {
 		// Handle image messages (can contain both text and images)
 		if (typeof text === 'object' && text.images && Array.isArray(text.images)) {
 			// New multi-image format: {text: "", images: ["data:image...", "data:image..."]}
@@ -131,18 +158,22 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 		}
 	}
 	const safeMid = (meta && meta.id && /^[A-Za-z0-9]{8,32}$/.test(meta.id)) ? meta.id : null;
-	const reactionBarHtml = safeMid
-		? `<span class="bubble-actions"><button type="button" class="msg-react-btn" data-mid="${safeMid}" aria-label="react">😊+</button></span><span class="msg-reactions" data-mid="${safeMid}"></span>`
-		: '';
+	const actionsHtml = buildMessageActionsHtml(safeMid, {
+		isOwnText: msgType === 'text',
+		timestamp: ts
+	});
+	const editedMark = (meta && meta.edited) ? `<span class="msg-edited">${escapeHTML(t('ui.edited', '(edited)'))}</span>` : '';
+	const burnMark = (meta && meta.ttl) ? `<span class="msg-burn">🔥${meta.ttl < 60 ? meta.ttl + 's' : (meta.ttl / 60) + 'm'}</span>` : '';
 	const div = createElement('div', {
 		class: className,
 		...(safeMid ? { 'data-mid': safeMid } : {})
-	}, `<span class="bubble-content">${contentHtml}</span>${reactionBarHtml}<span class="bubble-meta">${time}</span>`);
+	}, `<span class="bubble-content">${quoteHtml}${contentHtml}${editedMark}</span>${actionsHtml}<span class="bubble-meta">${burnMark}${time}</span>`);
 	chatArea.appendChild(div);
 	if (safeMid) renderReactions(safeMid);
+	const rdBurn = roomsData[activeRoomIndex];
+	if (safeMid && meta && meta.ttl && rdBurn) armBurnTimer(rdBurn, safeMid, meta.ttl, ts);
 	chatArea.scrollTop = chatArea.scrollHeight
 }
-
 // Add a message from another user to the chat area
 // 添加来自其他用户的消息到聊天区域
 export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, msgType = 'text', timestamp = null, meta = null) {
@@ -213,12 +244,30 @@ export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, 
 		}
 	}
 	const safeMid = (meta && meta.id && /^[A-Za-z0-9]{8,32}$/.test(meta.id)) ? meta.id : null;
-	const reactionBarHtml = safeMid
-		? `<span class="bubble-actions"><button type="button" class="msg-react-btn" data-mid="${safeMid}" aria-label="react">😊+</button></span><span class="msg-reactions" data-mid="${safeMid}"></span>`
-		: '';
 	const safeUserName = escapeHTML(userName);
 	const date = new Date(ts);
 	const time = date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0');
+	// P1-B: tombstone rendering for recalled / burned entries
+	if (safeMid && meta && (meta.deleted || meta.burned)) {
+		const tombWrap = createElement('div', { class: 'bubble-other-wrap' });
+		tombWrap.innerHTML = `<span class="avatar"></span><div class="bubble-other-main"><div class="bubble other recalled" data-mid="${safeMid}"><div class="bubble-other-name">${safeUserName}</div><span class="bubble-content"><span class="msg-recalled">${escapeHTML(t(meta.burned ? 'ui.burned' : 'ui.recalled', meta.burned ? 'Message expired' : 'Message recalled'))}</span></span><span class="bubble-meta">${time}</span></div></div>`;
+		const tombAvatar = $('.avatar', tombWrap);
+		if (tombAvatar) {
+			const cleanSvg = createAvatarSVG(userName).replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+			tombAvatar.innerHTML = cleanSvg
+		}
+		chatArea.appendChild(tombWrap);
+		chatArea.scrollTop = chatArea.scrollHeight;
+		return
+	}
+	// P1-B: reply-quote block (both fields remote-controlled → escaped)
+	const quoteHtml = (meta && meta.quote && meta.quote.x)
+		? `<span class="msg-quote"><span class="msg-quote-name">${escapeHTML(String(meta.quote.u || ''))}</span><span class="msg-quote-text">${escapeHTML(String(meta.quote.x).slice(0, 200))}</span></span>`
+		: '';
+	const actionsHtml = buildMessageActionsHtml(safeMid, {
+		isOwnText: false,
+		timestamp: ts
+	});
 	let bubbleClasses = 'bubble other';
 	if (msgType && msgType.includes('_private')) {
 		bubbleClasses += ' private-message'
@@ -229,7 +278,7 @@ export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, 
 	if (meta && meta.mentionsMe) {
 		bubbleClasses += ' mentioned';
 	}
-	bubbleWrap.innerHTML = `<span class="avatar"></span><div class="bubble-other-main"><div class="${bubbleClasses}"${safeMid ? ` data-mid="${safeMid}"` : ''}><div class="bubble-other-name">${safeUserName}</div><span class="bubble-content">${contentHtml}</span>${reactionBarHtml}<span class="bubble-meta">${time}</span></div></div>`;
+	bubbleWrap.innerHTML = `<span class="avatar"></span><div class="bubble-other-main"><div class="${bubbleClasses}"${safeMid ? ` data-mid="${safeMid}"` : ''}><div class="bubble-other-name">${safeUserName}</div><span class="bubble-content">${quoteHtml}${contentHtml}</span>${actionsHtml}<span class="bubble-meta">${(meta && meta.ttl) ? `<span class="msg-burn">🔥${meta.ttl < 60 ? meta.ttl + 's' : (meta.ttl / 60) + 'm'}</span>` : ''}${time}</span></div></div>`;
 	const svg = createAvatarSVG(userName);
 	const avatarEl = $('.avatar', bubbleWrap);
 	if (avatarEl) {
@@ -648,6 +697,41 @@ export function setupReactionsUI() {
 			showReactionPicker(reactBtn.dataset.mid, reactBtn);
 			return
 		}
+		// ---- P1-B: reply / edit / recall / bar cancel ----
+		const replyBtn = e.target.closest('.msg-reply-btn');
+		if (replyBtn) {
+			e.stopPropagation();
+			const rd2 = roomsData[activeRoomIndex];
+			if (rd2 && replyBtn.dataset.mid) startReply(rd2, replyBtn.dataset.mid);
+			return
+		}
+		const editBtn = e.target.closest('.msg-edit-btn');
+		if (editBtn) {
+			e.stopPropagation();
+			const rd2 = roomsData[activeRoomIndex];
+			if (rd2 && editBtn.dataset.mid) startEdit(rd2, editBtn.dataset.mid);
+			return
+		}
+		const delBtn = e.target.closest('.msg-del-btn');
+		if (delBtn) {
+			e.stopPropagation();
+			const rd2 = roomsData[activeRoomIndex];
+			const mid = delBtn.dataset.mid;
+			if (!rd2 || !mid || !rd2.chat) return;
+			if (!window.confirm(t('ui.confirm_recall', 'Recall this message?'))) return;
+			if (rd2.chat.sendDelete(mid)) {
+				recallMessageLocal(rd2, mid)
+			}
+			return
+		}
+		const barCancel = e.target.closest('.jmlt-bar-cancel');
+		if (barCancel) {
+			e.stopPropagation();
+			if (barCancel.dataset.bar === 'edit') pendingEdit = null;
+			else pendingReply = null;
+			renderActionBars();
+			return
+		}
 		const chip = e.target.closest('.msg-reaction-chip');
 		if (chip) {
 			e.stopPropagation();
@@ -742,4 +826,227 @@ export function clearDraft(channelHash) {
 	try {
 		sessionStorage.removeItem(key)
 	} catch (error) { /* noop */ }
+}
+
+// ==================== P1-B: reply / edit / recall / burn-after-timer ====================
+// 回复引用 / 编辑 / 撤回 / 定时焚毁。SECURITY/RULES.md 对照：
+// - 全部走既有 E2EE 内容层（'w' 信封内的 'edit'/'del' action），服务器盲转发、零改动
+// - 接收端校验发起者 = 原作者（author clientId），防同房成员伪造撤回/编辑
+// - 编辑时限 15 分钟，双端校验；撤回/焚毁后同步从加密本地历史中剔除（不可复活）
+// - 引用块字段（q.u/q.x）全部 escapeHTML 后插入（不变量 5）
+
+const EDIT_WINDOW_MS = 15 * 60 * 1000;
+
+// Module state (per-tab): reply target, editing target, burn timer mode
+let pendingReply = null; // { id, name, snippet, scope }
+let pendingEdit = null;  // { id }
+let burnTtl = 0;         // 0 | 30 | 300 | 3600 (seconds)
+
+export function getPendingReply() { return pendingReply }
+export function clearPendingReply() {
+	pendingReply = null;
+	renderActionBars()
+}
+export function getPendingEdit() { return pendingEdit }
+export function clearPendingEdit() {
+	pendingEdit = null;
+	renderActionBars()
+}
+export function getBurnTtl() { return burnTtl }
+
+// Clear transient composer states (used when switching rooms so a stale
+// reply/edit never leaks across rooms)
+export function resetComposerState() {
+	pendingReply = null;
+	pendingEdit = null;
+	const rb = document.getElementById('jmlt-reply-bar');
+	if (rb) rb.remove();
+	const eb = document.getElementById('jmlt-edit-bar');
+	if (eb) eb.remove()
+}
+
+// Action buttons row for a bubble (function declaration — hoisted, used above)
+// 气泡操作按钮排（函数声明提升，供上方调用）
+function buildMessageActionsHtml(safeMid, opts) {
+	if (!safeMid) return '';
+	const isOwnText = !!(opts && opts.isOwnText);
+	const ts = (opts && opts.timestamp) || Date.now();
+	const editOpen = isOwnText && (Date.now() - ts) < EDIT_WINDOW_MS;
+	return `<span class="bubble-actions">` +
+		`<button type="button" class="msg-act-btn msg-reply-btn" data-mid="${safeMid}" title="${escapeHTML(t('ui.reply', 'Reply'))}">↩</button>` +
+		(editOpen ? `<button type="button" class="msg-act-btn msg-edit-btn" data-mid="${safeMid}" title="${escapeHTML(t('ui.edit', 'Edit'))}">✏</button>` : '') +
+		(editOpen ? `<button type="button" class="msg-act-btn msg-del-btn" data-mid="${safeMid}" title="${escapeHTML(t('ui.delete', 'Recall'))}">🗑</button>` : '') +
+		`<button type="button" class="msg-react-btn" data-mid="${safeMid}" aria-label="react">😊+</button>` +
+		`</span><span class="msg-reactions" data-mid="${safeMid}"></span>`
+}
+
+// Arm (or re-arm) the local burn timer for a message entry. Re-arming on
+// history re-render uses the remaining time, so timers survive room switches.
+// 为消息条目布置本地焚毁定时器；历史重渲染时按剩余时间重排。
+export function armBurnTimer(rd, mid, ttl, ts) {
+	if (!rd || !mid || !ttl) return;
+	const entry = findMessageById(rd, mid);
+	if (!entry || entry.burned || entry.deleted) return;
+	if (entry._burnTimer) {
+		clearTimeout(entry._burnTimer);
+		entry._burnTimer = null
+	}
+	const remaining = ttl * 1000 - (Date.now() - (ts || entry.timestamp || Date.now()));
+	entry._burnTimer = setTimeout(() => burnMessageLocal(rd, mid), Math.max(0, remaining))
+}
+
+// Replace a bubble's DOM with a tombstone (recalled / burned)
+// 将气泡替换为占位标记
+function recallBubbleDom(mid, label) {
+	const bubble = document.querySelector('#chat-area [data-mid="' + mid + '"]');
+	if (!bubble) return;
+	bubble.classList.add('recalled');
+	bubble.innerHTML = `<span class="bubble-content"><span class="msg-recalled">${escapeHTML(label)}</span></span>`
+}
+
+// Locally burn a message (timer expiry). Also purged from encrypted local
+// history so it cannot be resurrected on rejoin.
+// 本地焚毁消息（定时器到期），并同步从加密本地历史剔除。
+export function burnMessageLocal(rd, mid) {
+	if (!rd || !mid || !/^[A-Za-z0-9]{8,32}$/.test(mid)) return false;
+	const entry = findMessageById(rd, mid);
+	if (!entry || entry.burned || entry.deleted) return false;
+	entry.burned = true;
+	entry.text = null;
+	if (entry._burnTimer) {
+		clearTimeout(entry._burnTimer);
+		entry._burnTimer = null
+	}
+	purgeLocalHistory(rd, e => e && e.id === mid);
+	recallBubbleDom(mid, t('ui.burned', 'Message expired'));
+	return true
+}
+
+// Locally recall a message (sender action confirmed, or verified remote del)
+// 本地撤回消息
+export function recallMessageLocal(rd, mid) {
+	if (!rd || !mid || !/^[A-Za-z0-9]{8,32}$/.test(mid)) return false;
+	const entry = findMessageById(rd, mid);
+	if (!entry || entry.burned || entry.deleted) return false;
+	entry.deleted = true;
+	entry.text = null;
+	if (entry._burnTimer) {
+		clearTimeout(entry._burnTimer);
+		entry._burnTimer = null
+	}
+	purgeLocalHistory(rd, e => e && e.id === mid);
+	recallBubbleDom(mid, t('ui.recalled', 'Message recalled'));
+	return true
+}
+
+// Apply a verified edit to a message entry + its bubble DOM.
+// 应用已验证的编辑到消息条目与气泡 DOM。
+export function applyEditLocal(rd, mid, text, mentions) {
+	if (!rd || !mid || !/^[A-Za-z0-9]{8,32}$/.test(mid)) return false;
+	const entry = findMessageById(rd, mid);
+	if (!entry || entry.burned || entry.deleted) return false;
+	if (Date.now() - (entry.timestamp || 0) > EDIT_WINDOW_MS) return false;
+	entry.text = text;
+	entry.edited = true;
+	if (Array.isArray(mentions) && mentions.length) entry.mentions = mentions;
+	// keep encrypted local history honest: replace the stale entry
+	purgeLocalHistory(rd, e => e && e.id === mid);
+	appendLocalHistory(rd, {
+		type: entry.type,
+		text,
+		msgType: entry.msgType,
+		timestamp: entry.timestamp,
+		id: mid,
+		edited: true
+	});
+	const bubble = document.querySelector('#chat-area [data-mid="' + mid + '"]');
+	if (bubble) {
+		const contentEl = bubble.querySelector('.bubble-content');
+		if (contentEl) {
+			let html = textToHTML(text);
+			if (Array.isArray(mentions) && mentions.length) {
+				html = highlightMentionsInHtml(html, resolveMentionNames(mentions))
+			}
+			contentEl.innerHTML = html + `<span class="msg-edited">${escapeHTML(t('ui.edited', '(edited)'))}</span>`
+		}
+	}
+	return true
+}
+
+// Start a reply to a message (composer bar above the input area)
+// 发起回复（输入区上方的引用条）
+function startReply(rd, mid) {
+	const entry = findMessageById(rd, mid);
+	if (!entry || entry.burned || entry.deleted) return;
+	const name = entry.type === 'me' ? (rd.myUserName || '') : (entry.userName || '');
+	let snippet = '…';
+	if (typeof entry.text === 'string') snippet = entry.text.slice(0, 200);
+	else if (entry.msgType && entry.msgType.indexOf('image') === 0) snippet = '🖼';
+	else if (entry.msgType && entry.msgType.indexOf('file') === 0) snippet = '📎';
+	pendingEdit = null;
+	pendingReply = {
+		id: mid,
+		name,
+		snippet,
+		scope: (entry.msgType && entry.msgType.indexOf('_private') !== -1) ? 'private' : 'public'
+	};
+	renderActionBars()
+}
+
+// Start editing one of my own public text messages (loads text into composer)
+// 编辑自己的公共文本消息（载入输入框）
+function startEdit(rd, mid) {
+	const entry = findMessageById(rd, mid);
+	if (!entry || entry.burned || entry.deleted) return;
+	if (entry.msgType !== 'text') return;
+	if (Date.now() - (entry.timestamp || 0) > EDIT_WINDOW_MS) return;
+	if (typeof entry.text !== 'string') return;
+	pendingReply = null;
+	pendingEdit = { id: mid };
+	const inputEl = document.querySelector('.input-message-input');
+	if (inputEl) {
+		inputEl.innerText = entry.text;
+		inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+		inputEl.focus()
+	}
+	renderActionBars()
+}
+
+// Render the reply/edit bar above the input area (creates/removes as needed)
+// 渲染输入区上方的回复/编辑条
+function renderActionBars() {
+	const rb = document.getElementById('jmlt-reply-bar');
+	if (rb) rb.remove();
+	const eb = document.getElementById('jmlt-edit-bar');
+	if (eb) eb.remove();
+	const rd = roomsData[activeRoomIndex];
+	if (!rd) return;
+	if (pendingEdit) {
+		const bar = createElement('div', { id: 'jmlt-edit-bar', class: 'jmlt-action-bar' });
+		bar.innerHTML = `<span class="jmlt-bar-label">✏ ${escapeHTML(t('ui.editing_msg', 'Editing message'))}</span><button type="button" class="jmlt-bar-cancel" data-bar="edit">${escapeHTML(t('ui.cancel', 'Cancel'))}</button>`;
+		const inputArea = document.querySelector('.chat-input-area');
+		if (inputArea && inputArea.parentNode) inputArea.parentNode.insertBefore(bar, inputArea)
+	} else if (pendingReply) {
+		const bar = createElement('div', { id: 'jmlt-reply-bar', class: 'jmlt-action-bar' });
+		bar.innerHTML = `<span class="jmlt-bar-label">↩ <b>${escapeHTML(pendingReply.name || '')}</b> ${escapeHTML(String(pendingReply.snippet || '').slice(0, 120))}</span><button type="button" class="jmlt-bar-cancel" data-bar="reply">${escapeHTML(t('ui.cancel', 'Cancel'))}</button>`;
+		const inputArea = document.querySelector('.chat-input-area');
+		if (inputArea && inputArea.parentNode) inputArea.parentNode.insertBefore(bar, inputArea)
+	}
+}
+
+// Burn-timer toggle button in the composer (off → 30s → 5m → 1h → off)
+// 输入区的焚毁定时切换按钮（关 → 30s → 5m → 1h → 关）
+export function setupBurnBtn() {
+	const btn = document.querySelector('.chat-burn-btn');
+	if (!btn || btn.dataset.burnSetup === '1') return;
+	btn.dataset.burnSetup = '1';
+	const labels = { 0: '⏱', 30: '⏱30s', 300: '⏱5m', 3600: '⏱1h' };
+	on(btn, 'click', () => {
+		burnTtl = burnTtl === 0 ? 30 : burnTtl === 30 ? 300 : burnTtl === 300 ? 3600 : 0;
+		btn.textContent = labels[burnTtl];
+		btn.classList.toggle('active', burnTtl !== 0);
+		btn.title = burnTtl
+			? '🔥 ' + (burnTtl < 60 ? burnTtl + 's' : (burnTtl / 60) + 'm')
+			: t('ui.burn_off', 'Burn timer: off')
+	})
 }

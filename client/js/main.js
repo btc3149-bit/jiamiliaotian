@@ -75,7 +75,14 @@ import {
 	setupReactionsUI,     // 表情回应交互（事件委托）/ Reaction UI (event delegation)
 	autoGrowInput,        // 自动调整输入框高度 / Auto adjust input height
 	saveDraft,            // P2: 保存房间草稿 / Save per-room draft
-	clearDraft            // P2: 清除房间草稿 / Clear per-room draft
+	clearDraft,           // P2: 清除房间草稿 / Clear per-room draft
+	getPendingReply,      // P1-B: 当前回复目标 / Current reply target
+	clearPendingReply,    // P1-B: 清除回复目标 / Clear reply target
+	getPendingEdit,       // P1-B: 当前编辑目标 / Current edit target
+	clearPendingEdit,     // P1-B: 清除编辑目标 / Clear edit target
+	getBurnTtl,           // P1-B: 当前焚毁定时 / Current burn timer
+	applyEditLocal,       // P1-B: 本地应用编辑 / Apply edit locally
+	setupBurnBtn          // P1-B: 焚毁定时按钮 / Burn-timer toggle button
 } from './chat.js';
 
 // 从 ui.js 中导入 UI 界面相关的功能
@@ -152,6 +159,7 @@ window.addEventListener('DOMContentLoaded', () => {
 	// Initialize autofill, input placeholders, and menus
 	autofillRoomPwd();	setupInputPlaceholder();
 	setupReactionsUI();
+	setupBurnBtn(); // P1-B: burn-timer toggle in composer
 	setupMoreBtnMenu();
 	setupImagePreview();	setupEmojiPicker();
 	// 由于我们已经在DOM加载前预先初始化了语言设置，这里不需要重复初始化
@@ -243,8 +251,35 @@ window.addEventListener('DOMContentLoaded', () => {
 
 		if (!text && images.length === 0) return; // 如果没有文本且没有图片，则不发送
 		const rd = roomsData[activeRoomIndex]; // 当前房间数据 / Current room data
-		
+
+		// P1-B: editing flow — send an encrypted edit instead of a new message
+		// P1-B：编辑流程——发送加密 edit，而不是新消息
+		const editing = getPendingEdit();
+		if (editing) {
+			const editText = input.innerText.trim();
+			if (editText && rd && rd.chat) {
+				const editMentions = parseMentions(editText, rd);
+				if (rd.chat.sendEdit(editing.id, editText, editMentions)) {
+					applyEditLocal(rd, editing.id, editText, editMentions);
+				}
+				clearPendingEdit();
+				input.innerHTML = '';
+				if (imagePasteHandler && typeof imagePasteHandler.refreshPlaceholder === 'function') {
+					imagePasteHandler.refreshPlaceholder();
+				}
+				autoGrowInput();
+			}
+			return;
+		}
+
 		if (rd && rd.chat) {
+			// P1-B: reply target + burn timer (scope-guarded: a private-source
+			// reply may only attach to a private send, and vice versa — so a
+			// private quote can never leak into the public channel)
+			// P1-B：回复目标 + 焚毁定时（作用域守卫，杜绝私聊引用串台）
+			const reply = getPendingReply();
+			const ttl = getBurnTtl();
+			const replyAllowed = !!(reply && ((reply.scope === 'private') === (rd.privateChatTargetId != null)));
 			if (images.length > 0) {
 				// 发送包含图片的消息 (支持多图和文字合并)
 				// Send message with images (supports multiple images and text combined)
@@ -287,8 +322,8 @@ window.addEventListener('DOMContentLoaded', () => {
 				// 发送纯文本消息
 				// Send text-only message
 				if (rd.privateChatTargetId) {
-					// 私聊消息加密并发送
-					// Encrypt and send private message
+					// 私聊文本消息加密并发送（P1-B: 附带回复/焚毁字段，均在内容层）
+					// Encrypt and send private text message (reply/burn fields stay in content layer)
 					const targetClient = rd.chat.channel[rd.privateChatTargetId];
 					if (targetClient && targetClient.shared) {
 						const clientMessagePayload = {
@@ -297,6 +332,11 @@ window.addEventListener('DOMContentLoaded', () => {
 							d: text,
 							id: rd.chat.genMessageId()
 						};
+						if (replyAllowed) {
+							clientMessagePayload.rt = reply.id;
+							clientMessagePayload.q = { u: reply.name, x: reply.snippet };
+						}
+						if (ttl) clientMessagePayload.ttl = ttl;
 						const encryptedClientMessage = rd.chat.encryptClientMessage(clientMessagePayload, targetClient.shared);
 						const serverRelayPayload = {
 							a: 'c',
@@ -304,7 +344,11 @@ window.addEventListener('DOMContentLoaded', () => {
 							c: rd.privateChatTargetId
 						};
 						const encryptedMessageForServer = rd.chat.encryptServerMessage(serverRelayPayload, rd.chat.serverShared);
-						rd.chat.sendMessage(encryptedMessageForServer);					addMsg(text, false, 'text_private', null, { id: clientMessagePayload.id });
+						rd.chat.sendMessage(encryptedMessageForServer);					addMsg(text, false, 'text_private', null, {
+							id: clientMessagePayload.id,
+							quote: replyAllowed ? { u: reply.name, x: reply.snippet } : null,
+							ttl: ttl || null
+						});
 					} else {
 						addSystemMsg(`${t('system.private_message_failed', 'Cannot send private message to')} ${rd.privateChatTargetName}. ${t('system.user_not_connected', 'User might not be fully connected.')}`)
 					}
@@ -312,12 +356,22 @@ window.addEventListener('DOMContentLoaded', () => {
 					// 公共频道消息发送（携带 @提及，走 E2EE 内容层）
 					// Send public message (with @mentions, inside E2EE content layer)
 					const mentionIds = parseMentions(text, rd);
-					const mid = rd.chat.sendChannelMessage('text', text, mentionIds.length ? { m: mentionIds } : undefined);
+					const extras = {};
+					if (mentionIds.length) extras.m = mentionIds;
+					if (replyAllowed) {
+						extras.rt = reply.id;
+						extras.q = { u: reply.name, x: reply.snippet };
+					}
+					if (ttl) extras.ttl = ttl;
+					const mid = rd.chat.sendChannelMessage('text', text, Object.keys(extras).length ? extras : undefined);
 					addMsg(text, false, 'text', null, {
 						id: typeof mid === 'string' ? mid : null,
-						mentions: mentionIds
+						mentions: mentionIds,
+						quote: replyAllowed ? { u: reply.name, x: reply.snippet } : null,
+						ttl: ttl || null
 					});
 				}
+				if (reply) clearPendingReply();
 			}
 
 			// 清空输入框并触发 input 事件

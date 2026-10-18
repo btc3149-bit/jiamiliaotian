@@ -45,6 +45,8 @@ class NodeCrypt {
 			onClientMessage: callbacks.onClientMessage || null,
 			onClientReaction: callbacks.onClientReaction || null,
 			onClientTyping: callbacks.onClientTyping || null,
+			onClientEdit: callbacks.onClientEdit || null,
+			onClientDelete: callbacks.onClientDelete || null,
 		};
 		try {
 			this.clientEc = new elliptic('curve25519')
@@ -373,13 +375,21 @@ class NodeCrypt {
 				if (this.callbacks.onClientMessage) {
 					try {
 						// mentions: optional array of clientIds (content-layer field)
+						// rt/q/ttl: P1-B reply-quote + burn-timer (content-layer only)
 						this.callbacks.onClientMessage({
 							clientId: serverDecrypted.c,
 							username: this.channel[serverDecrypted.c].username,
 							type: clientDecrypted.t,
 							data: clientDecrypted.d,
 							id: this.isString(clientDecrypted.id) ? clientDecrypted.id : null,
-							mentions: Array.isArray(clientDecrypted.m) ? clientDecrypted.m.filter(m => this.isString(m)) : []
+							mentions: Array.isArray(clientDecrypted.m) ? clientDecrypted.m.filter(m => this.isString(m)) : [],
+							rid: this.isString(clientDecrypted.rt) && /^[A-Za-z0-9]{8,32}$/.test(clientDecrypted.rt) ? clientDecrypted.rt : null,
+							quote: (this.isObject(clientDecrypted.q)
+								&& this.isString(clientDecrypted.q.x)
+								&& clientDecrypted.q.x.length <= 300)
+								? { u: this.isString(clientDecrypted.q.u) ? clientDecrypted.q.u.slice(0, 64) : '', x: clientDecrypted.q.x }
+								: null,
+							ttl: (clientDecrypted.ttl === 30 || clientDecrypted.ttl === 300 || clientDecrypted.ttl === 3600) ? clientDecrypted.ttl : null
 						})
 					} catch (error) {
 						this.logEvent('onMessage-client-message-callback', error, 'error')
@@ -414,6 +424,39 @@ class NodeCrypt {
 						})
 					} catch (error) {
 						this.logEvent('onMessage-client-typing-callback', error, 'error')
+					}
+				}
+				return
+			}
+			if (clientDecrypted.a === 'edit' && this.isString(clientDecrypted.id) && this.isString(clientDecrypted.t)) {
+				// P1-B: edit of an earlier text message (content-layer action).
+				// Receivers still verify authorship + time window before applying.
+				if (this.callbacks.onClientEdit) {
+					try {
+						this.callbacks.onClientEdit({
+							clientId: serverDecrypted.c,
+							username: this.channel[serverDecrypted.c].username,
+							targetId: clientDecrypted.id,
+							text: clientDecrypted.t.slice(0, 10000),
+							mentions: Array.isArray(clientDecrypted.m) ? clientDecrypted.m.filter(m => this.isString(m)) : []
+						})
+					} catch (error) {
+						this.logEvent('onMessage-client-edit-callback', error, 'error')
+					}
+				}
+				return
+			}
+			if (clientDecrypted.a === 'del' && this.isString(clientDecrypted.id)) {
+				// P1-B: recall (delete) of an earlier message (content-layer action).
+				if (this.callbacks.onClientDelete) {
+					try {
+						this.callbacks.onClientDelete({
+							clientId: serverDecrypted.c,
+							username: this.channel[serverDecrypted.c].username,
+							targetId: clientDecrypted.id
+						})
+					} catch (error) {
+						this.logEvent('onMessage-client-delete-callback', error, 'error')
 					}
 				}
 				return
@@ -671,6 +714,89 @@ class NodeCrypt {
 				return (true)
 			} catch (error) {
 				this.logEvent('sendTyping', error, 'error')
+			}
+		}
+		return (false)
+	}
+
+	// P1-B: broadcast an edit of an earlier text message. Content-layer action
+	// ('edit') inside the existing E2EE 'w' envelope — server relays opaquely.
+	// Receivers re-verify authorship + the edit time window before applying.
+	// P1-B：广播对早期文本消息的编辑。内容层 action（'edit'）走既有 E2EE 信封。
+	sendEdit(targetMessageId, newText, mentions) {
+		if (this.serverShared) {
+			try {
+				const safeId = String(targetMessageId || '');
+				const safeText = String(newText || '').slice(0, 10000);
+				if (!/^[A-Za-z0-9]{8,32}$/.test(safeId) || !safeText.trim()) {
+					return (false)
+				}
+				const safeMentions = Array.isArray(mentions)
+					? mentions.filter(m => this.isString(m)).slice(0, 32)
+					: [];
+				let payloads = {};
+				for (const clientId in this.channel) {
+					if (this.channel[clientId].shared && this.channel[clientId].username) {
+						const body = {
+							a: 'edit',
+							id: safeId,
+							t: safeText
+						};
+						if (safeMentions.length) body.m = safeMentions;
+						payloads[clientId] = this.encryptClientMessage(body, this.channel[clientId].shared);
+					}
+				}
+				if (Object.keys(payloads).length > 0) {
+					const payload = this.encryptServerMessage({
+						a: 'w',
+						p: payloads,
+					}, this.serverShared);
+					if (!this.isOpen() || payload.length === 0 || payload.length > (8 * 1024 * 1024)) {
+						return (false)
+					}
+					this.connection.send(payload)
+				}
+				return (true)
+			} catch (error) {
+				this.logEvent('sendEdit', error, 'error')
+			}
+		}
+		return (false)
+	}
+
+	// P1-B: broadcast a recall (delete) of an earlier message. Content-layer
+	// action ('del') inside the existing E2EE 'w' envelope — server relays
+	// opaquely. Receivers re-verify authorship before applying.
+	// P1-B：广播撤回早期消息。内容层 action（'del'）走既有 E2EE 信封。
+	sendDelete(targetMessageId) {
+		if (this.serverShared) {
+			try {
+				const safeId = String(targetMessageId || '');
+				if (!/^[A-Za-z0-9]{8,32}$/.test(safeId)) {
+					return (false)
+				}
+				let payloads = {};
+				for (const clientId in this.channel) {
+					if (this.channel[clientId].shared && this.channel[clientId].username) {
+						payloads[clientId] = this.encryptClientMessage({
+							a: 'del',
+							id: safeId
+						}, this.channel[clientId].shared);
+					}
+				}
+				if (Object.keys(payloads).length > 0) {
+					const payload = this.encryptServerMessage({
+						a: 'w',
+						p: payloads,
+					}, this.serverShared);
+					if (!this.isOpen() || payload.length === 0 || payload.length > (8 * 1024 * 1024)) {
+						return (false)
+					}
+					this.connection.send(payload)
+				}
+				return (true)
+			} catch (error) {
+				this.logEvent('sendDelete', error, 'error')
 			}
 		}
 		return (false)

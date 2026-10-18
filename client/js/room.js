@@ -13,7 +13,11 @@ import {
 	updateTypingIndicator,
 	saveDraft,
 	loadDraft,
-	clearDraft
+	clearDraft,
+	recallMessageLocal,
+	burnMessageLocal,
+	applyEditLocal,
+	armBurnTimer
 } from './chat.js';
 import {
 	renderMainHeader,
@@ -227,7 +231,9 @@ export function joinRoom(userName, roomName, password, modal = null, onResult) {
 		onClientLeft: (clientId) => handleClientLeft(idx, clientId),
 		onClientMessage: (msg) => handleClientMessage(idx, msg),
 		onClientReaction: (r) => handleClientReaction(idx, r),
-		onClientTyping: (msg) => handleClientTyping(idx, msg)
+		onClientTyping: (msg) => handleClientTyping(idx, msg),
+		onClientEdit: (r) => handleClientEdit(idx, r),
+		onClientDelete: (r) => handleClientDelete(idx, r)
 	};
 	const chatInst = new window.NodeCrypt(window.config, callbacks);
 	roomsData[idx].chat = chatInst;
@@ -347,6 +353,34 @@ export function handleClientReaction(idx, r) {
 	}
 }
 
+// P1-B: handle a verified-then-rechecked remote edit. Authorship is enforced
+// here (author clientId must match) in addition to the 15-minute window
+// checked in applyEditLocal — room members cannot edit each other's messages.
+// P1-B：处理远端编辑。双重校验：作者匹配 + 15 分钟时限，防伪造。
+export function handleClientEdit(idx, r) {
+	const rd = roomsData[idx];
+	if (!rd || !r || !r.targetId) return;
+	if (!/^[A-Za-z0-9]{8,32}$/.test(r.targetId)) return;
+	if (typeof r.text !== 'string' || !r.text.trim() || r.text.length > 10000) return;
+	const entry = rd.messages.find(m => m.id === r.targetId);
+	if (!entry || entry.burned || entry.deleted) return;
+	if (!entry.author || !r.clientId || entry.author !== r.clientId) return;
+	applyEditLocal(rd, r.targetId, r.text, Array.isArray(r.mentions) ? r.mentions : [])
+}
+
+// P1-B: handle a remote recall. Same authorship rule — only the original
+// author's 'del' is honored.
+// P1-B：处理远端撤回。同一作者规则——只认原作者的 'del'。
+export function handleClientDelete(idx, r) {
+	const rd = roomsData[idx];
+	if (!rd || !r || !r.targetId) return;
+	if (!/^[A-Za-z0-9]{8,32}$/.test(r.targetId)) return;
+	const entry = rd.messages.find(m => m.id === r.targetId);
+	if (!entry || entry.burned || entry.deleted) return;
+	if (!entry.author || !r.clientId || entry.author !== r.clientId) return;
+	recallMessageLocal(rd, r.targetId)
+}
+
 // Handle client message event
 // 处理客户端消息事件
 export function handleClientMessage(idx, msg) {
@@ -441,15 +475,25 @@ export function handleClientMessage(idx, msg) {
 		id: msg.id || null,
 		reactions: null,
 		mentions: Array.isArray(msg.mentions) && msg.mentions.length ? msg.mentions : null,
-		mentionsMe: mentionsMe
+		mentionsMe: mentionsMe,
+		author: msg.clientId || null,
+		quote: msg.quote || null,
+		ttl: msg.ttl || null,
+		edited: false,
+		deleted: false,
+		burned: false
 	});
+	// P1-B: arm the local burn timer for incoming timed messages
+	if (msg.id && msg.ttl) armBurnTimer(newRd, msg.id, msg.ttl, tsOther);
 	// P3: opt-in encrypted local history (no-op unless enabled + key derived)
 	appendLocalHistory(newRd, {
 		type: 'other',
 		text: msg.data,
 		userName: realUserName,
 		msgType: msgType,
-		timestamp: tsOther
+		timestamp: tsOther,
+		id: msg.id || null,
+		ttl: msg.ttl || null
 	});
 
 	// Only add message to chat display if it's for the active room
@@ -458,7 +502,9 @@ export function handleClientMessage(idx, msg) {
 			window.addOtherMsg(msg.data, realUserName, realUserName, false, msgType, null, {
 				id: msg.id || null,
 				mentions: Array.isArray(msg.mentions) ? msg.mentions : [],
-				mentionsMe: mentionsMe
+				mentionsMe: mentionsMe,
+				quote: msg.quote || null,
+				ttl: msg.ttl || null
 			});
 		}
 	} else {

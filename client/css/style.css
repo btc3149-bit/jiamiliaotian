@@ -2347,3 +2347,199 @@ html[data-mode="dark"] .share-qr-box {
   max-width: 260px;
   line-height: 1.45;
 }
+
+/* ==================== P1-B: reply / edit / recall / burn ==================== */
+
+/* Action buttons inside bubbles (reply / edit / recall / react) */
+.bubble-actions {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	margin-left: 6px;
+	vertical-align: middle;
+	opacity: 0;
+	transition: opacity .15s ease;
+}
+.bubble:hover .bubble-actions,
+.bubble-other-wrap:hover .bubble-actions {
+	opacity: 1;
+}
+.msg-act-btn {
+	border: none;
+	background: transparent;
+	cursor: pointer;
+	font-size: 13px;
+	line-height: 1;
+	padding: 2px 4px;
+	border-radius: 6px;
+	color: #808080;
+}
+.msg-act-btn:hover {
+	background: rgba(0, 0, 0, .07);
+	color: #357ae8;
+}
+
+/* Reply quote block inside a bubble */
+.msg-quote {
+	display: block;
+	border-left: 3px solid #357ae8;
+	background: rgba(53, 122, 232, .08);
+	border-radius: 6px;
+	padding: 4px 8px;
+	margin: 0 0 6px 0;
+	max-width: 100%;
+	overflow: hidden;
+}
+.msg-quote-name {
+	display: block;
+	font-size: 12px;
+	font-weight: 600;
+	color: #357ae8;
+	margin-bottom: 2px;
+	word-break: break-all;
+}
+.msg-quote-text {
+	display: block;
+	font-size: 12px;
+	color: #666;
+	white-space: pre-wrap;
+	word-break: break-word;
+	max-height: 3.6em;
+	overflow: hidden;
+}
+
+/* (edited) mark */
+.msg-edited {
+	font-size: 11px;
+	color: #999;
+	margin-left: 6px;
+	font-style: italic;
+}
+
+/* Recalled / burned tombstone */
+.bubble.recalled .bubble-content,
+.msg-recalled {
+	font-size: 13px;
+	font-style: italic;
+	color: #999;
+}
+.bubble.recalled {
+	opacity: .75;
+}
+.bubble.recalled .bubble-actions {
+	display: none;
+}
+
+/* Burn countdown chip in bubble meta */
+.msg-burn {
+	font-size: 11px;
+	color: #e67e22;
+	margin-right: 4px;
+}
+
+/* Reply / edit bar above the composer */
+.jmlt-action-bar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin: 0 12px 4px 12px;
+	padding: 6px 10px;
+	background: rgba(53, 122, 232, .08);
+	border-left: 3px solid #357ae8;
+	border-radius: 8px;
+	font-size: 13px;
+	color: #555;
+	max-width: calc(100% - 24px);
+	overflow: hidden;
+}
+.jmlt-bar-label {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.jmlt-bar-label b {
+	color: #357ae8;
+	font-weight: 600;
+	margin-right: 4px;
+}
+.jmlt-bar-cancel {
+	border: none;
+	background: transparent;
+	color: #357ae8;
+	cursor: pointer;
+	font-size: 12px;
+	padding: 2px 6px;
+	border-radius: 6px;
+	flex-shrink: 0;
+}
+.jmlt-bar-cancel:hover {
+	background: rgba(53, 122, 232, .12);
+}
+
+/* Burn-timer toggle button in composer */
+.chat-burn-btn {
+	border: none;
+	background: transparent;
+	cursor: pointer;
+	font-size: 18px;
+	line-height: 1;
+	padding: 4px 6px;
+	border-radius: 8px;
+	color: #808080;
+	align-self: center;
+}
+.chat-burn-btn:hover {
+	background: rgba(0, 0, 0, .06);
+}
+.chat-burn-btn.active {
+	color: #e67e22;
+	background: rgba(230, 126, 34, .12);
+}
+
+/* ---- dark mode overrides (P3 darkmode block) ---- */
+html[data-mode="dark"] .msg-act-btn {
+	color: #aaa;
+}
+html[data-mode="dark"] .msg-act-btn:hover {
+	background: rgba(255, 255, 255, .1);
+	color: #7aa7f0;
+}
+html[data-mode="dark"] .msg-quote {
+	background: rgba(122, 167, 240, .12);
+	border-left-color: #7aa7f0;
+}
+html[data-mode="dark"] .msg-quote-name {
+	color: #7aa7f0;
+}
+html[data-mode="dark"] .msg-quote-text {
+	color: #b5b5b5;
+}
+html[data-mode="dark"] .msg-edited,
+html[data-mode="dark"] .bubble.recalled .bubble-content,
+html[data-mode="dark"] .msg-recalled {
+	color: #888;
+}
+html[data-mode="dark"] .jmlt-action-bar {
+	background: rgba(122, 167, 240, .1);
+	color: #ccc;
+}
+html[data-mode="dark"] .jmlt-bar-label b {
+	color: #7aa7f0;
+}
+html[data-mode="dark"] .jmlt-bar-cancel {
+	color: #7aa7f0;
+}
+html[data-mode="dark"] .jmlt-bar-cancel:hover {
+	background: rgba(122, 167, 240, .15);
+}
+html[data-mode="dark"] .chat-burn-btn {
+	color: #aaa;
+}
+html[data-mode="dark"] .chat-burn-btn:hover {
+	background: rgba(255, 255, 255, .08);
+}
+html[data-mode="dark"] .chat-burn-btn.active {
+	color: #f0932a;
+	background: rgba(240, 147, 42, .15);
+}

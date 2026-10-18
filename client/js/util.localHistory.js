@@ -174,6 +174,27 @@ export function clearAllLocalHistory() {
 	return removed
 }
 
+// Remove entries matching a predicate from a room's local history buffer and
+// schedule an encrypted flush. Used by recall/burn so deleted or expired
+// messages cannot be resurrected from encrypted local history later.
+// 按谓词从房间本地历史缓冲中剔除条目并安排加密回写——撤回/焚毁的消息
+// 之后无法从加密历史里"复活"。
+export function purgeLocalHistory(rd, predicate) {
+	if (!rd || !rd.historyBuffer || typeof predicate !== 'function') return 0;
+	let removed = 0;
+	try {
+		const before = rd.historyBuffer.length;
+		rd.historyBuffer = rd.historyBuffer.filter(e => !predicate(e));
+		removed = before - rd.historyBuffer.length;
+		if (removed > 0) {
+			const prev = flushTimers.get(rd);
+			if (prev) clearTimeout(prev);
+			flushTimers.set(rd, setTimeout(() => flushHistory(rd), 800))
+		}
+	} catch (error) { /* best-effort */ }
+	return removed
+}
+
 // Attach the (memory-only) history key + buffer to a room data object.
 // Call once per room join after the channel hash is known.
 // 加入房间时挂载历史密钥（仅内存）与缓冲区。
