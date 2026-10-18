@@ -6,7 +6,7 @@
   "scripts": {
     "build": "vite build",
     "icons": "node scripts/gen-icons.mjs",
-    "test": "node test-crypto.mjs && node test-localHistory.mjs",
+    "test": "node test-crypto.mjs && node test-localHistory.mjs && node test-protocol.mjs",
     "dev": " wrangler dev",
     "deploy": " wrangler deploy",
     "publish": " wrangler publish",

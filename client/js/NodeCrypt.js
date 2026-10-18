@@ -177,7 +177,11 @@ class NodeCrypt {
 		this.connection.onerror = null;
 		this.connection.onclose = null;
 		try {
-			this.connection.removeAllListeners()
+			// R4 fix (review 4f): browser WebSocket has no removeAllListeners;
+			// only call it when the runtime actually provides it.
+			if (typeof this.connection.removeAllListeners === 'function') {
+				this.connection.removeAllListeners()
+			}
 		} catch (error) {
 			this.logEvent('destruct', error, 'error')
 		}
@@ -221,7 +225,7 @@ class NodeCrypt {
 		try {
 			const data = JSON.parse(event.data);
 			if (data.type === 'server-key') {
-				const result = await this.handleServerKey(data.key);
+				const result = await this.handleServerKey(data);
 				if (!result) {
 					return
 				}
@@ -791,9 +795,11 @@ class NodeCrypt {
 					}
 				}
 				if (Object.keys(payloads).length > 0) {
+					// R2: np:1 — typing must never wake offline subscribers.
 					const payload = this.encryptServerMessage({
 						a: 'w',
 						p: payloads,
+						np: 1
 					}, this.serverShared);
 					if (!this.isOpen() || payload.length === 0 || payload.length > (8 * 1024 * 1024)) {
 						return (false)
@@ -912,9 +918,11 @@ class NodeCrypt {
 					}
 				}
 				if (Object.keys(payloads).length > 0) {
+					// R2: np:1 — read receipts must never wake offline subscribers.
 					const payload = this.encryptServerMessage({
 						a: 'w',
 						p: payloads,
+						np: 1
 					}, this.serverShared);
 					if (!this.isOpen() || payload.length === 0 || payload.length > (8 * 1024 * 1024)) {
 						return (false)
@@ -952,9 +960,11 @@ class NodeCrypt {
 					}
 				}
 				if (Object.keys(payloads).length > 0) {
+					// R2: np:1 — sync requests must never wake offline subscribers.
 					const payload = this.encryptServerMessage({
 						a: 'w',
 						p: payloads,
+						np: 1
 					}, this.serverShared);
 					if (!this.isOpen() || payload.length === 0 || payload.length > (8 * 1024 * 1024)) {
 						return (false)
@@ -1007,7 +1017,9 @@ class NodeCrypt {
 				const serverRelayPayload = this.encryptServerMessage({
 					a: 'c',
 					p: clientMessagePayload,
-					c: targetId
+					c: targetId,
+					// R2: replay batches are history backfill, not new messages.
+					np: 1
 				}, this.serverShared);
 				if (!this.isOpen() || serverRelayPayload.length === 0 || serverRelayPayload.length > (8 * 1024 * 1024)) {
 					return (false)
@@ -1158,9 +1170,17 @@ class NodeCrypt {
 	// XOR two hex strings
 	// 对两个十六进制字符串进行异或
 	xorHex(a, b) {
-		let result = '',
-			hexLength = Math.min(a.length, b.length);
-		for (let i = 0; i < hexLength; ++i) {
+		// R4 fix (review 4g): validate hex strictly. Invalid input previously
+		// produced 'NaN' garbage or silent misalignment; now it fails loudly.
+		// 修复评审 4g：严格校验十六进制，非法输入直接报错而不是产出垃圾密钥。
+		if (!this.isString(a) || !this.isString(b) || a.length === 0 || a.length !== b.length) {
+			throw new Error('xorHex: inputs must be non-empty hex strings of equal length')
+		}
+		if (!/^[0-9a-f]+$/i.test(a) || !/^[0-9a-f]+$/i.test(b)) {
+			throw new Error('xorHex: non-hex character in input')
+		}
+		let result = '';
+		for (let i = 0; i < a.length; ++i) {
 			result += (parseInt(a.charAt(i), 16) ^ parseInt(b.charAt(i), 16)).toString(16)
 		}
 		return (result)
@@ -1191,7 +1211,11 @@ class NodeCrypt {
 	// of silently re-trusting the new key (which enabled trivial MITM).
 	// The pin is namespaced per room (channel hash) because each room maps to
 	// its own Durable Object with its own RSA keypair.
-	async handleServerKey(serverKey) {
+	async handleServerKey(data) {
+		const serverKey = data && data.key;
+		if (!this.isString(serverKey) || !serverKey) {
+			return false
+		}
 		let stored = null;
 		try {
 			stored = localStorage.getItem(this.pinKey())
@@ -1201,7 +1225,41 @@ class NodeCrypt {
 		const pinned = this.config.rsaPublicFixed ? this.config.rsaPublic : stored;
 		if (pinned) {
 			if (pinned !== serverKey) {
-				this.logEvent('handleServerKey', 'server key mismatch — possible MITM or key rotation', 'error');
+				// R1 fix: a legitimate rotation carries a migration signature —
+				// the PREVIOUS (pinned) private key signing the NEW public key.
+				// Verifying it with our pin proves the rotation is authentic
+				// (a MITM cannot produce it), so we rotate the pin seamlessly.
+				// 修复评审 R1：合法轮换携带迁移签名（旧私钥签新公钥），验证通过即无缝换 pin。
+				if (this.isString(data.mig) && data.mig && await this.verifyKeyMigration(pinned, serverKey, data.mig)) {
+					try {
+						localStorage.setItem(this.pinKey(), serverKey)
+					} catch (error) {
+						this.logEvent('handleServerKey', error, 'error')
+					}
+					this.config.rsaPublic = serverKey;
+					this.logEvent('handleServerKey', 'server key rotated — migration signature verified, pin updated');
+					return true
+				}
+				// No valid migration proof. Could be MITM — or genuine server state
+				// loss (e.g. DO namespace reset after a wrangler rename, manual
+				// rotation). RULES 第一准则: the trust decision belongs to the user,
+				// never to silent auto-retrust. Reconnecting also stops on decline
+				// so the prompt cannot be spammed every 3 seconds.
+				// 无有效迁移证明：可能是中间人，也可能是服务器状态丢失。信任决策交给用户，
+				// 拒绝则停止重连，避免死循环弹窗。
+				this.logEvent('handleServerKey', 'server key mismatch — no valid migration signature', 'error');
+				const accepted = await this.promptServerKeyReset(serverKey);
+				if (accepted) {
+					try {
+						localStorage.setItem(this.pinKey(), serverKey)
+					} catch (error) {
+						this.logEvent('handleServerKey', error, 'error')
+					}
+					this.config.rsaPublic = serverKey;
+					this.logEvent('handleServerKey', 'user accepted new server key, pin reset');
+					return true
+				}
+				this.stopReconnect();
 				this.disconnect();
 				if (this.callbacks.onServerClosed) {
 					try {
@@ -1222,6 +1280,56 @@ class NodeCrypt {
 		}
 		this.config.rsaPublic = serverKey;
 		return true
+	}
+
+	// Verify a key-rotation migration signature: the pinned (previous) public
+	// key must verify a RSASSA-PKCS1-v1_5/SHA-256 signature over the raw SPKI
+	// bytes of the new public key.
+	// 验证密钥轮换迁移签名：用 pin 住的旧公钥验证对「新公钥原始 SPKI 字节」的签名。
+	async verifyKeyMigration(pinnedB64, newKeyB64, migB64) {
+		try {
+			const oldVerifyKey = await crypto.subtle.importKey(
+				'spki',
+				Buffer.from(pinnedB64, 'base64'),
+				{ name: 'RSASSA-PKCS1-v1_5', hash: { name: 'SHA-256' } },
+				false,
+				['verify']
+			);
+			const newKeyBytes = Buffer.from(newKeyB64, 'base64');
+			const sigBytes = Buffer.from(migB64, 'base64');
+			return await crypto.subtle.verify(
+				{ name: 'RSASSA-PKCS1-v1_5' },
+				oldVerifyKey,
+				sigBytes,
+				newKeyBytes
+			) === true
+		} catch (error) {
+			this.logEvent('verifyKeyMigration', error, 'error');
+			return false
+		}
+	}
+
+	// Ask the user explicitly before re-trusting a changed server key.
+	// Overridable via callbacks.onServerKeyMismatch for custom UI.
+	// 重置服务器密钥前显式询问用户；可通过 onServerKeyMismatch 回调自定义 UI。
+	async promptServerKeyReset(newKeyFingerprintSource) {
+		if (this.callbacks.onServerKeyMismatch) {
+			try {
+				return this.callbacks.onServerKeyMismatch(newKeyFingerprintSource) === true
+			} catch (error) {
+				this.logEvent('promptServerKeyReset', error, 'error');
+				return false
+			}
+		}
+		if (typeof window === 'undefined' || typeof window.confirm !== 'function') {
+			return false
+		}
+		return window.confirm(
+			'⚠️ 服务器安全密钥已变更，且未携带有效的轮换证明。\n\n' +
+			'可能原因：① 服务器被重新部署/状态重置（正常）；② 有人正在中间劫持连接（危险）。\n\n' +
+			'如果你是服务器管理员，或确认本次变更合法，点击「确定」信任新密钥并继续；否则点击「取消」断开连接。\n\n' +
+			'The server security key changed without a valid rotation proof. This may be a redeploy, or a man-in-the-middle attack. Accept the new key only if you trust this change.'
+		)
 	}
 
 	// Per-room TOFU pin storage key (each room DO has its own RSA keypair)

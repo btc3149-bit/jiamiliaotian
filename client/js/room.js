@@ -23,6 +23,7 @@ import {
 	markMessageReadDom
 } from './chat.js';
 import { reportPushSubscription } from './util.push.js';
+import { selectReplayable, dedupeReplayBatch } from './util.validate.js';
 import {
 	renderMainHeader,
 	renderUserList
@@ -466,29 +467,8 @@ export function handleClientSync(idx, r) {
 	if (!rd.chat || typeof rd.chat.sendSyncReplay !== 'function') return;
 	const since = (typeof r.since === 'number' && r.since >= 0) ? r.since : 0;
 	const known = new Set(Array.isArray(r.ids) ? r.ids : []);
-	const out = [];
-	for (const m of rd.messages) {
-		if (out.length >= 50) break;
-		if (!m || !m.id || known.has(m.id)) continue;
-		if (m.type === 'system' || m.burned || m.deleted) continue;
-		if (typeof m.timestamp !== 'number' || m.timestamp <= since) continue;
-		const mt = (m.msgType === 'image' || m.msgType === 'image_private') ? 'image' : (m.msgType === 'text' ? 'text' : null);
-		if (!mt) continue; // file transfers / unknown types cannot be replayed
-		if (typeof m.text !== 'string' || m.text.length === 0) continue;
-		if (mt === 'text' && m.text.length > 10000) continue;
-		if (mt === 'image' && m.text.length > 300000) continue;
-		out.push({
-			id: m.id,
-			t: mt,
-			d: m.text,
-			ts: m.timestamp,
-			u: m.type === 'me' ? (rd.myUserName || '') : (m.userName || ''),
-			self: m.type === 'me',
-			...(Array.isArray(m.mentions) && m.mentions.length ? { m: m.mentions.slice(0, 20) } : {}),
-			...(m.quote ? { q: m.quote } : {}),
-			...(m.ttl ? { ttl: m.ttl } : {})
-		});
-	}
+	// R5: selection/sanitization now lives in the pure, unit-tested helper.
+	const out = selectReplayable(rd.messages, since, known, rd.myUserName || '');
 	if (out.length > 0) {
 		try {
 			rd.chat.sendSyncReplay(r.clientId, out);
@@ -506,37 +486,26 @@ export function handleClientReplay(idx, r) {
 	const rd = roomsData[idx];
 	if (!rd || !r || !Array.isArray(r.msgs) || r.msgs.length === 0) return;
 	const existing = new Set(rd.messages.filter(m => m.id).map(m => m.id));
-	const batch = [];
-	for (const e of r.msgs.slice(0, 50)) {
-		if (!e || typeof e !== 'object') continue;
-		if (typeof e.id !== 'string' || !/^[A-Za-z0-9]{8,32}$/.test(e.id) || existing.has(e.id)) continue;
-		if ((e.t !== 'text' && e.t !== 'image') || typeof e.d !== 'string' || e.d.length === 0) continue;
-		if (e.t === 'text' && e.d.length > 10000) continue;
-		if (e.t === 'image' && e.d.length > 300000) continue;
-		const ts = (typeof e.ts === 'number' && e.ts > 0 && e.ts < Date.now() + 60000) ? e.ts : Date.now();
-		const realUserName = (typeof e.u === 'string' && e.u)
-			? e.u
-			: (e.self ? (rd.myUserName || '') : t('ui.anonymous', 'Anonymous'));
+	// R5: dedupe + sanitization now lives in the pure, unit-tested helper.
+	const batch = dedupeReplayBatch(r.msgs, existing);
+	if (!batch.length) return;
+	for (const e of batch) {
+		const realUserName = e.u || (e.self ? (rd.myUserName || '') : t('ui.anonymous', 'Anonymous'));
 		const entry = {
 			type: 'other',
 			text: e.d,
 			userName: realUserName,
 			avatar: realUserName,
 			msgType: e.t === 'image' ? 'image' : 'text',
-			timestamp: ts,
+			timestamp: e.ts || Date.now(),
 			id: e.id,
 			reactions: null,
-			mentions: Array.isArray(e.m) && e.m.length ? e.m : null,
-			mentionsMe: Array.isArray(e.m) && rd.myId && e.m.indexOf(rd.myId) !== -1,
+			mentions: e.m.length ? e.m : null,
+			mentionsMe: e.m.length && rd.myId && e.m.indexOf(rd.myId) !== -1,
 			fromSync: true
 		};
-		if (e.q && typeof e.q.x === 'string') entry.quote = { u: typeof e.q.u === 'string' ? e.q.u : '', x: e.q.x };
-		if (e.ttl === 30 || e.ttl === 300 || e.ttl === 3600) entry.ttl = e.ttl;
-		existing.add(e.id);
-		batch.push(entry);
-	}
-	if (!batch.length) return;
-	for (const entry of batch) {
+		if (e.q) entry.quote = e.q;
+		if (e.ttl) entry.ttl = e.ttl;
 		rd.messages.push(entry);
 		// opt-in encrypted local history (no-op unless enabled + key derived)
 		appendLocalHistory(rd, {

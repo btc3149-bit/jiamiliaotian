@@ -98,6 +98,15 @@ http {
     server {
         listen 80;
         server_name localhost;
+
+        # R3 fix (review): mirror the worker path's security headers so the
+        # Docker deployment gets the same XSS defense-in-depth.
+        # 修复评审 R3：Docker 路径补齐与 worker 相同的安全响应头。
+        add_header Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' wss: https:; font-src 'self' data:" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
         
         # Main location block - handles both HTTP and WebSocket
         # 主位置块 - 处理 HTTP 和 WebSocket

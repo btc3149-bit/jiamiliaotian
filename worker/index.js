@@ -94,38 +94,13 @@ export class ChatRoom {  constructor(state, env) {
     try {
       let stored = await this.state.storage.get('rsaKeyPair');
       if (!stored) {
-        console.log('Generating new RSA keypair...');
-          const keyPair = await crypto.subtle.generateKey(
-          {
-            name: 'RSASSA-PKCS1-v1_5',
-            modulusLength: 2048,
-            publicExponent: new Uint8Array([1, 0, 1]),
-            hash: 'SHA-256'
-          },
-          true,
-          ['sign', 'verify']
-        );
-
-        // 并行导出公钥和私钥以提高性能
-        const [publicKeyBuffer, privateKeyBuffer] = await Promise.all([
-          crypto.subtle.exportKey('spki', keyPair.publicKey),
-          crypto.subtle.exportKey('pkcs8', keyPair.privateKey)
-        ]);
-        
-        stored = {
-          rsaPublic: btoa(String.fromCharCode(...new Uint8Array(publicKeyBuffer))),
-          rsaPrivateData: Array.from(new Uint8Array(privateKeyBuffer)),
-          createdAt: Date.now() // 记录密钥创建时间，用于后续判断是否需要轮换
-        };
-        
-        await this.state.storage.put('rsaKeyPair', stored);
-        console.log('RSA key pair generated and stored');
+        stored = await this.generateAndStoreKeyPair();
       }
-      
+
       // Reconstruct the private key
       if (stored.rsaPrivateData) {
         const privateKeyBuffer = new Uint8Array(stored.rsaPrivateData);
-        
+
         stored.rsaPrivate = await crypto.subtle.importKey(
           'pkcs8',
           privateKeyBuffer,
@@ -135,25 +110,123 @@ export class ChatRoom {  constructor(state, env) {
           },
           false,
           ['sign']
-        );      }
-        this.keyPair = stored;
-      
-      // 检查密钥是否需要轮换（如果已创建超过24小时）
+        );
+      }
+      this.keyPair = stored;
+
+      // R1 fix: 24h rotation now KEEPS the previous keypair for 48h as a
+      // migration signing key, so TOFU-pinned clients can verify the rotation
+      // (old key signs the new public key) and update their pin seamlessly
+      // instead of being locked out forever. 修复评审 R1。
       if (stored.createdAt && (Date.now() - stored.createdAt > 24 * 60 * 60 * 1000)) {
-        // 如果没有任何客户端，则执行密钥轮换
         if (Object.keys(this.clients).length === 0) {
-          console.log('密钥已使用24小时，进行轮换...');
-          await this.state.storage.delete('rsaKeyPair');
-          this.keyPair = null;
-          await this.initRSAKeyPair();
+          logEvent('key-rotation', 'rotating after 24h');
+          await this.rotateKeyPair();
         } else {
-          // 否则标记需要在客户端全部断开后进行轮换
           await this.state.storage.put('pendingKeyRotation', true);
         }
       }
     } catch (error) {
-      console.error('Error initializing RSA key pair:', error);
+      logEvent('init-rsa-key-pair', error, 'error');
       throw error;
+    }
+  }
+
+  // Generate a fresh keypair and persist it (exportable SPKI/PKCS8 forms).
+  async generateAndStoreKeyPair() {
+    const keyPair = await crypto.subtle.generateKey(
+      {
+        name: 'RSASSA-PKCS1-v1_5',
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: 'SHA-256'
+      },
+      true,
+      ['sign', 'verify']
+    );
+
+    const [publicKeyBuffer, privateKeyBuffer] = await Promise.all([
+      crypto.subtle.exportKey('spki', keyPair.publicKey),
+      crypto.subtle.exportKey('pkcs8', keyPair.privateKey)
+    ]);
+
+    const stored = {
+      rsaPublic: btoa(String.fromCharCode(...new Uint8Array(publicKeyBuffer))),
+      rsaPrivateData: Array.from(new Uint8Array(privateKeyBuffer)),
+      createdAt: Date.now()
+    };
+    await this.state.storage.put('rsaKeyPair', stored);
+    logEvent('key-generated', 'new RSA key pair stored');
+    return stored;
+  }
+
+  // Rotate to a new keypair, preserving the previous one for 48h so pinned
+  // clients can verify the handover via a migration signature.
+  // 轮换到新密钥对，旧密钥保留 48 小时供客户端验证交接。
+  async rotateKeyPair() {
+    const old = await this.state.storage.get('rsaKeyPair');
+    if (old) {
+      await this.state.storage.put('rsaKeyPairOld', Object.assign({}, old, {
+        retireAt: Date.now() + (48 * 60 * 60 * 1000)
+      }));
+    }
+    await this.state.storage.delete('rsaKeyPair');
+    await this.state.storage.delete('pendingKeyRotation');
+    this.keyPair = null;
+    this.oldKeyPair = null;
+    const fresh = await this.generateAndStoreKeyPair();
+    if (fresh.rsaPrivateData) {
+      fresh.rsaPrivate = await crypto.subtle.importKey(
+        'pkcs8',
+        new Uint8Array(fresh.rsaPrivateData),
+        { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+        false,
+        ['sign']
+      );
+    }
+    this.keyPair = fresh;
+  }
+
+  // R1: migration signature — the PREVIOUS private key signs the CURRENT
+  // public key (raw SPKI bytes). A client pinning the old key verifies this
+  // with its pin and rotates trust seamlessly. A MITM cannot produce this
+  // signature without the old private key, so TOFU guarantees hold.
+  // 迁移签名：旧私钥对新公钥（原始 SPKI 字节）签名，客户端用旧 pin 验证后无缝换 pin。
+  async getMigrationSignature() {
+    try {
+      let old = await this.state.storage.get('rsaKeyPairOld');
+      if (!old) return null;
+      if (old.retireAt && Date.now() > old.retireAt) {
+        await this.state.storage.delete('rsaKeyPairOld');
+        this.oldKeyPair = null;
+        return null;
+      }
+      if (!this.oldKeyPair || this.oldKeyPair.rsaPublic !== old.rsaPublic) {
+        if (!old.rsaPrivateData) return null;
+        const priv = await crypto.subtle.importKey(
+          'pkcs8',
+          new Uint8Array(old.rsaPrivateData),
+          { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+          false,
+          ['sign']
+        );
+        this.oldKeyPair = { rsaPublic: old.rsaPublic, rsaPrivate: priv };
+      }
+      if (!this.keyPair || !this.keyPair.rsaPublic) return null;
+      // raw SPKI bytes of the current public key
+      const newKeyBytes = Uint8Array.from(atob(this.keyPair.rsaPublic), (c) => c.charCodeAt(0));
+      const sig = await crypto.subtle.sign(
+        { name: 'RSASSA-PKCS1-v1_5' },
+        this.oldKeyPair.rsaPrivate,
+        newKeyBytes
+      );
+      let binary = '';
+      const bytes = new Uint8Array(sig);
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      return btoa(binary);
+    } catch (error) {
+      logEvent('key-migration-signature', error, 'error');
+      return null;
     }
   }
 
@@ -201,13 +274,15 @@ export class ChatRoom {  constructor(state, env) {
       channel: null
     };
 
-    // Send RSA public key
+    // Send RSA public key (plus R1 migration signature when a previous
+    // keypair is still within its 48h handover window).
+    // 下发 RSA 公钥（若旧密钥仍在 48 小时交接窗口内，附带迁移签名）。
     try {
       logEvent('sending-public-key', clientId, 'debug');
-      this.sendMessage(connection, JSON.stringify({
-        type: 'server-key',
-        key: this.keyPair.rsaPublic
-      }));
+      const keyMsg = { type: 'server-key', key: this.keyPair.rsaPublic };
+      const mig = await this.getMigrationSignature();
+      if (mig) keyMsg.mig = mig;
+      this.sendMessage(connection, JSON.stringify(keyMsg));
     } catch (error) {
       logEvent('sending-public-key', error, 'error');
     }    // Handle messages
@@ -371,6 +446,15 @@ export class ChatRoom {  constructor(state, env) {
       return;
     }
 
+    // R4 fix (review 4b): the client always joins with the sha256 hex hash of
+    // the room name (same value used for DO routing). Enforce that format so
+    // arbitrary strings cannot become channel names.
+    // 修复评审 4b：频道名强制为房间名的 sha256 十六进制哈希，拒绝任意字符串。
+    if (!/^[0-9a-f]{64}$/.test(decrypted.p)) {
+      logEvent('message-join', [clientId, 'invalid channel format'], 'error');
+      return;
+    }
+
     try {
       const channel = decrypted.p;
 
@@ -412,9 +496,14 @@ export class ChatRoom {  constructor(state, env) {
       }
 
       // Web Push: something was relayed in this room — nudge subscribers.
-      // Fire-and-forget with waitUntil; zero content in the push itself.
-      // 有消息转发即触发推送提醒（空 payload，waitUntil 后台执行）。
-      this.queuePushToSubscribers();
+      // R2 fix: senders can set np:1 on the transport envelope for non-
+      // message events (typing, read receipts, sync replay) so those never
+      // wake offline subscribers with fake "new message" pushes. The flag is
+      // a single transport-layer bit; content stays opaque to the server.
+      // 修复评审 R2：发送方对非消息事件（typing/回执/重播）置 np:1，服务器跳过推送。
+      if (!decrypted.np) {
+        this.queuePushToSubscribers();
+      }
 
     } catch (error) {
       logEvent('message-client', [clientId, error], 'error');
@@ -446,8 +535,12 @@ export class ChatRoom {  constructor(state, env) {
         messageObj.p = null;
       }
 
-      // Web Push nudge for channel relays too / 频道转发同样触发推送提醒
-      this.queuePushToSubscribers();
+      // Web Push nudge for channel relays too — unless the sender marked
+      // this envelope as non-notifiable (R2: typing / receipts / sync).
+      // 频道转发同样触发推送提醒，但发送方标记 np:1 的非消息事件除外。
+      if (!decrypted.np) {
+        this.queuePushToSubscribers();
+      }
 
     } catch (error) {
       logEvent('message-channel', [clientId, error], 'error');
@@ -513,7 +606,11 @@ export class ChatRoom {  constructor(state, env) {
 
   // Send generic (empty payload) pushes to all due subscribers. Throttled per
   // endpoint; dead endpoints (404/410) are pruned. Called fire-and-forget.
-  // 向到期订阅者发泛化推送（按端点节流，失效端点剔除）。异步后台执行。
+  // R4 fix (review 4a): DOs have no ctx.waitUntil; the DO stays alive while
+  // its WebSocket connections are active, which covers this call site (it
+  // only fires from live WS message handlers). Failures are logged, never
+  // propagated to the caller.
+  // 向到期订阅者发泛化推送（按端点节流，失效端点剔除）。异步后台执行，失败仅记日志。
   async queuePushToSubscribers() {
     try {
       if (!this.env || !this.env.VAPID_STORE) return;
@@ -634,10 +731,9 @@ export class ChatRoom {  constructor(state, env) {
     if (Object.keys(this.clients).length === 0 && Object.keys(this.channels).length === 0) {
       const pendingRotation = await this.state.storage.get('pendingKeyRotation');
       if (pendingRotation) {
-        console.log('没有活跃客户端或房间，执行密钥轮换...');
-        await this.state.storage.delete('rsaKeyPair');        await this.state.storage.delete('pendingKeyRotation');
-        this.keyPair = null;
-        await this.initRSAKeyPair();
+        logEvent('key-rotation', 'rotating after last client left');
+        // R1 fix: rotation keeps the old key 48h for client pin migration.
+        await this.rotateKeyPair();
       }
     }
     

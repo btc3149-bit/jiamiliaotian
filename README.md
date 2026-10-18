@@ -11,7 +11,17 @@
 
 - 构建命令：npm run build
 - 部署命令：npm run deploy
-- 
+
+### 部署方式功能差异（务必知悉）
+
+| 能力 | Cloudflare Workers（推荐） | Docker 自托管 |
+|---|---|---|
+| Web Push 离线通知 | ✅ | ❌ 未实现（订阅会被静默忽略） |
+| 已读回执 / 断线补拉 | ✅ | ✅（协议层通用） |
+| 安全响应头（CSP 等） | ✅ | ✅（R3 修复后已补齐） |
+| 房间分片 / 水平扩展 | ✅ 按 DO 分片 | ❌ 单进程 |
+
+> **关于 Worker 名称**：`wrangler.toml` 中 `name = "nodecrypt"` 是有意保留的——更改 Worker 名称会切换 Durable Object 命名空间，导致所有房间的服务器 RSA 密钥重置，已 pin 密钥的现有用户会被锁在房间外。如确需改名，请提前通知所有成员清空浏览器中 `nodecrypt_server_key:*` 前缀的 localStorage 键。
 
 ## 📝 项目简介
 
