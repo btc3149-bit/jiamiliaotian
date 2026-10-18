@@ -47,6 +47,7 @@ class NodeCrypt {
 			onClientTyping: callbacks.onClientTyping || null,
 			onClientEdit: callbacks.onClientEdit || null,
 			onClientDelete: callbacks.onClientDelete || null,
+			onClientReadReceipt: callbacks.onClientReadReceipt || null
 		};
 		try {
 			this.clientEc = new elliptic('curve25519')
@@ -461,6 +462,29 @@ class NodeCrypt {
 				}
 				return
 			}
+
+			if (clientDecrypted.a === 'rr') {
+				// P1-C: read receipts. The sender lists message ids they have
+				// actually seen (window visible + focused). Content-free signal.
+				// P1-C: 已读回执。发送方列出确实看过的消息 id（窗口可见且聚焦），
+				// 纯信号不携带内容。
+				if (Array.isArray(clientDecrypted.ids) && this.callbacks.onClientReadReceipt) {
+					const safeIds = clientDecrypted.ids
+						.filter((mid) => this.isString(mid) && /^[A-Za-z0-9]{8,32}$/.test(mid))
+						.slice(0, 50);
+					if (safeIds.length > 0) {
+						try {
+							this.callbacks.onClientReadReceipt({
+								clientId: serverDecrypted.c,
+								ids: safeIds
+							})
+						} catch (error) {
+							this.logEvent('onMessage-client-rr-callback', error, 'error')
+						}
+					}
+				}
+				return
+			}
 		}
 	}
 
@@ -797,6 +821,88 @@ class NodeCrypt {
 				return (true)
 			} catch (error) {
 				this.logEvent('sendDelete', error, 'error')
+			}
+		}
+		return (false)
+	}
+
+	// Broadcast read receipts (P1-C): list of message ids the local user has
+	// actually seen. Pure signal inside the E2EE content layer, server-blind.
+	// 广播已读回执（P1-C）：确实看过的消息 id 列表，E2EE 内容层纯信号。
+	sendReadReceipts(messageIds) {
+		if (this.serverShared) {
+			try {
+				if (!Array.isArray(messageIds)) return (false);
+				const safeIds = messageIds
+					.filter((mid) => this.isString(mid) && /^[A-Za-z0-9]{8,32}$/.test(mid))
+					.slice(0, 50);
+				if (safeIds.length === 0) return (false);
+				let payloads = {};
+				for (const clientId in this.channel) {
+					if (this.channel[clientId].shared && this.channel[clientId].username) {
+						payloads[clientId] = this.encryptClientMessage({
+							a: 'rr',
+							ids: safeIds
+						}, this.channel[clientId].shared);
+					}
+				}
+				if (Object.keys(payloads).length > 0) {
+					const payload = this.encryptServerMessage({
+						a: 'w',
+						p: payloads,
+					}, this.serverShared);
+					if (!this.isOpen() || payload.length === 0 || payload.length > (8 * 1024 * 1024)) {
+						return (false)
+					}
+					this.connection.send(payload)
+				}
+				return (true)
+			} catch (error) {
+				this.logEvent('sendReadReceipts', error, 'error')
+			}
+		}
+		return (false)
+	}
+
+	// Report a Web Push subscription endpoint to the server (P1-C). Travels
+	// over the E2EE transport layer as its own action ('ps') — the server
+	// learns only the opaque endpoint URL, nothing about rooms or messages.
+	// 向服务器上报 Web Push 订阅端点（P1-C）。走 E2EE 传输层独立 action（'ps'）。
+	sendPushSubscribe(endpoint) {
+		if (this.serverShared) {
+			try {
+				if (typeof endpoint !== 'string' || !endpoint.startsWith('https://') || endpoint.length > 500) {
+					return (false)
+				}
+				if (!this.isOpen()) return (false);
+				this.sendMessage(this.encryptServerMessage({
+					a: 'ps',
+					p: endpoint
+				}, this.serverShared));
+				return (true)
+			} catch (error) {
+				this.logEvent('sendPushSubscribe', error, 'error')
+			}
+		}
+		return (false)
+	}
+
+	// Withdraw a Web Push subscription endpoint (P1-C, action 'pu').
+	// 撤回 Web Push 订阅端点（P1-C，action 'pu'）。
+	sendPushUnsubscribe(endpoint) {
+		if (this.serverShared) {
+			try {
+				if (typeof endpoint !== 'string' || !endpoint.startsWith('https://') || endpoint.length > 500) {
+					return (false)
+				}
+				if (!this.isOpen()) return (false);
+				this.sendMessage(this.encryptServerMessage({
+					a: 'pu',
+					p: endpoint
+				}, this.serverShared));
+				return (true)
+			} catch (error) {
+				this.logEvent('sendPushUnsubscribe', error, 'error')
 			}
 		}
 		return (false)

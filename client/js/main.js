@@ -82,8 +82,13 @@ import {
 	clearPendingEdit,     // P1-B: 清除编辑目标 / Clear edit target
 	getBurnTtl,           // P1-B: 当前焚毁定时 / Current burn timer
 	applyEditLocal,       // P1-B: 本地应用编辑 / Apply edit locally
-	setupBurnBtn          // P1-B: 焚毁定时按钮 / Burn-timer toggle button
+	setupBurnBtn,         // P1-B: 焚毁定时按钮 / Burn-timer toggle button
+	setReadReceiptSender, // P1-C: 注入已读回执发送器 / Inject read-receipt sender
+	queueReadReceipt,     // P1-C: 排队已读回执 / Queue a read receipt
+	isWindowReading       // P1-C: 窗口是否处于阅读状态 / Is window in reading state
 } from './chat.js';
+// P1-C: Web Push 房间表访问器注入 / Web Push room-list accessor injection
+import { registerRoomListAccessor } from './util.push.js';
 
 // 从 ui.js 中导入 UI 界面相关的功能
 // Import user interface functions from ui.js
@@ -161,6 +166,33 @@ window.addEventListener('DOMContentLoaded', () => {
 	setupReactionsUI();
 	setupBurnBtn(); // P1-B: burn-timer toggle in composer
 	setupMoreBtnMenu();
+	// P1-C: give util.push.js read access to the live room list (injected to
+	// avoid a circular module import with room.js)
+	// P1-C: 向 util.push.js 注入房间表访问器（避免与 room.js 循环导入）
+	registerRoomListAccessor(() => roomsData);
+	// P1-C: wire the read-receipt sender to the active room's E2EE channel
+	// P1-C: 把已读回执发送器接到当前房间的 E2EE 通道
+	setReadReceiptSender((ids) => {
+		const rd = roomsData[activeRoomIndex];
+		if (rd && rd.chat) rd.chat.sendReadReceipts(ids);
+	});
+	// P1-C: when the window becomes readable again, scan the visible backlog
+	// and report what the user can actually see. Read rule: visible+focused.
+	// P1-C: 窗口重新可读时扫描可见积压，上报确实能看到的消息。
+	const scanVisibleBacklog = () => {
+		if (!isWindowReading()) return;
+		const rd = roomsData[activeRoomIndex];
+		if (!rd || !Array.isArray(rd.messages)) return;
+		const tail = rd.messages.slice(-40);
+		for (const entry of tail) {
+			if (entry.type === 'other' && entry.id && !entry.readSent) {
+				entry.readSent = true;
+				queueReadReceipt(entry.id)
+			}
+		}
+	};
+	document.addEventListener('visibilitychange', scanVisibleBacklog);
+	window.addEventListener('focus', scanVisibleBacklog);
 	setupImagePreview();	setupEmojiPicker();
 	// 由于我们已经在DOM加载前预先初始化了语言设置，这里不需要重复初始化
 	// initSettings();

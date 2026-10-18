@@ -12,12 +12,17 @@ binding = "ASSETS"
 
 [durable_objects]
 bindings = [
-  { name = "CHAT_ROOM", class_name = "ChatRoom" }
+  { name = "CHAT_ROOM", class_name = "ChatRoom" },
+  { name = "VAPID_STORE", class_name = "VapidStore" }
 ]
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["ChatRoom"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["VapidStore"]
 
 # SECURITY: 平台日志不开启采集；服务端代码也绝不允许 console.log 消息内容
 [observability]

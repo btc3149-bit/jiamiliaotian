@@ -1,8 +1,31 @@
 import { generateClientId, encryptMessage, decryptMessage, logEvent, isString, isObject, getTime } from './utils.js';
+import { sendWebPush, isAcceptableEndpoint } from './push.js';
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    // Web Push：客户端启动订阅前先来取 VAPID 公钥（public by design）。
+    // 密钥对由全局 VapidStore DO 懒生成并持久化，与推送签名方一致。
+    if (url.pathname === '/api/vapid') {
+      try {
+        const stub = env.VAPID_STORE.get(env.VAPID_STORE.idFromName('jmlt-vapid'));
+        const resp = await stub.fetch('https://vapid.internal/');
+        if (!resp.ok) {
+          return new Response(JSON.stringify({ error: 'vapid unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+        }
+        const keys = await resp.json();
+        return new Response(JSON.stringify({ publicKey: keys.publicKey }), {
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-store'
+          }
+        });
+      } catch (error) {
+        logEvent('api-vapid', error, 'error');
+        return new Response(JSON.stringify({ error: 'vapid error' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+      }
+    }
 
     // 处理WebSocket请求
     const upgradeHeader = request.headers.get('Upgrade');
@@ -48,11 +71,16 @@ export default {
 
 export class ChatRoom {  constructor(state, env) {
     this.state = state;
-    
+    this.env = env;
+
     // Use objects like original server.js instead of Maps
     this.clients = {};
     this.channels = {};
-    
+
+    // Web Push per-endpoint throttle (memory-only; resets on DO eviction).
+    // 推送节流表（仅内存，DO 重启即清零）。
+    this.pushThrottle = {};
+
     this.config = {
       seenTimeout: 60000,
       debug: false
@@ -325,6 +353,10 @@ export class ChatRoom {  constructor(state, env) {
         this.handleClientMessage(clientId, decrypted);
       } else if (action === 'w') {
         this.handleChannelMessage(clientId, decrypted);
+      } else if (action === 'ps') {
+        this.handlePushSubscribe(clientId, decrypted);
+      } else if (action === 'pu') {
+        this.handlePushUnsubscribe(clientId, decrypted);
       }
 
     } catch (error) {
@@ -379,6 +411,11 @@ export class ChatRoom {  constructor(state, env) {
         messageObj.p = null;
       }
 
+      // Web Push: something was relayed in this room — nudge subscribers.
+      // Fire-and-forget with waitUntil; zero content in the push itself.
+      // 有消息转发即触发推送提醒（空 payload，waitUntil 后台执行）。
+      this.queuePushToSubscribers();
+
     } catch (error) {
       logEvent('message-client', [clientId, error], 'error');
     }
@@ -409,10 +446,113 @@ export class ChatRoom {  constructor(state, env) {
         messageObj.p = null;
       }
 
+      // Web Push nudge for channel relays too / 频道转发同样触发推送提醒
+      this.queuePushToSubscribers();
+
     } catch (error) {
       logEvent('message-channel', [clientId, error], 'error');
     }
   }
+  // ==================== Web Push subscription management ====================
+  // 订阅管理。SECURITY (RULES.md)：
+  // - 端点经 E2EE 通道上报（'ps'/'pu'），DO 只存不透明端点 URL 本身
+  // - 不存 p256dh/auth 密钥（空 payload 推送用不上）
+  // - 上限 200 条、90 天过期；端点与 clientId 故意不关联，断连不产生关联性
+  static get PUSH_SUB_LIMIT() { return 200; }
+  static get PUSH_SUB_TTL_MS() { return 90 * 24 * 60 * 60 * 1000; }
+  static get PUSH_THROTTLE_MS() { return 15000; }
+
+  async getPushSubs() {
+    const subs = await this.state.storage.get('pushSubs');
+    return (subs && isObject(subs)) ? subs : {};
+  }
+
+  async handlePushSubscribe(clientId, decrypted) {
+    try {
+      const endpoint = decrypted.p;
+      if (!isAcceptableEndpoint(endpoint)) {
+        return;
+      }
+      const subs = await this.getPushSubs();
+      const now = Date.now();
+      // expire stale entries first / 先清理过期端点
+      for (const ep of Object.keys(subs)) {
+        if (!subs[ep] || !subs[ep].addedAt || (now - subs[ep].addedAt > ChatRoom.PUSH_SUB_TTL_MS)) {
+          delete subs[ep];
+        }
+      }
+      // cap: drop oldest when over limit / 超限淘汰最旧
+      const eps = Object.keys(subs);
+      if (!subs[endpoint] && eps.length >= ChatRoom.PUSH_SUB_LIMIT) {
+        eps.sort((a, b) => (subs[a].addedAt || 0) - (subs[b].addedAt || 0));
+        const excess = eps.length - ChatRoom.PUSH_SUB_LIMIT + 1;
+        for (let i = 0; i < excess; i++) delete subs[eps[i]];
+      }
+      subs[endpoint] = { addedAt: now };
+      await this.state.storage.put('pushSubs', subs);
+    } catch (error) {
+      logEvent('push-subscribe', [clientId, error], 'error');
+    }
+  }
+
+  async handlePushUnsubscribe(clientId, decrypted) {
+    try {
+      const endpoint = decrypted.p;
+      if (!isString(endpoint)) {
+        return;
+      }
+      const subs = await this.getPushSubs();
+      if (subs[endpoint]) {
+        delete subs[endpoint];
+        await this.state.storage.put('pushSubs', subs);
+      }
+    } catch (error) {
+      logEvent('push-unsubscribe', [clientId, error], 'error');
+    }
+  }
+
+  // Send generic (empty payload) pushes to all due subscribers. Throttled per
+  // endpoint; dead endpoints (404/410) are pruned. Called fire-and-forget.
+  // 向到期订阅者发泛化推送（按端点节流，失效端点剔除）。异步后台执行。
+  async queuePushToSubscribers() {
+    try {
+      if (!this.env || !this.env.VAPID_STORE) return;
+      const subs = await this.getPushSubs();
+      const now = Date.now();
+      const due = Object.keys(subs).filter((ep) => {
+        const last = this.pushThrottle[ep] || 0;
+        return (now - last) >= ChatRoom.PUSH_THROTTLE_MS;
+      }).slice(0, 50); // hard cap per event / 单事件硬上限
+      if (due.length === 0) return;
+      for (const ep of due) this.pushThrottle[ep] = now;
+
+      const vapidResp = await this.env.VAPID_STORE
+        .get(this.env.VAPID_STORE.idFromName('jmlt-vapid'))
+        .fetch('https://vapid.internal/');
+      if (!vapidResp.ok) return;
+      const vapid = await vapidResp.json();
+
+      const results = await Promise.all(due.map(async (ep) => {
+        let dead = false;
+        try {
+          const status = await sendWebPush(ep, vapid);
+          dead = (status === 404 || status === 410);
+        } catch (_) {
+          dead = false; // transient network error — keep the subscription
+        }
+        return dead ? ep : null;
+      }));
+      const deadEndpoints = results.filter(Boolean);
+      if (deadEndpoints.length > 0) {
+        const current = await this.getPushSubs();
+        for (const ep of deadEndpoints) delete current[ep];
+        await this.state.storage.put('pushSubs', current);
+      }
+    } catch (error) {
+      logEvent('push-broadcast', error, 'error');
+    }
+  }
+
   // Broadcast member list to channel
   broadcastMemberList(channel) {
     try {

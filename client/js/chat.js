@@ -44,7 +44,7 @@ export function renderChatArea() {
 	}
 	chatArea.innerHTML = '';
 	roomsData[activeRoomIndex].messages.forEach(m => {
-		const meta = { id: m.id, reactions: m.reactions, mentions: m.mentions, mentionsMe: m.mentionsMe, quote: m.quote, ttl: m.ttl, edited: m.edited, deleted: m.deleted, burned: m.burned };
+		const meta = { id: m.id, reactions: m.reactions, mentions: m.mentions, mentionsMe: m.mentionsMe, quote: m.quote, ttl: m.ttl, edited: m.edited, deleted: m.deleted, burned: m.burned, read: m.read };
 		if (m.type === 'me') addMsg(m.text, true, m.msgType || 'text', m.timestamp, meta);
 		else if (m.type === 'system') addSystemMsg(m.text, true, m.timestamp);
 		else addOtherMsg(m.text, m.userName, m.avatar, true, m.msgType || 'text', m.timestamp, meta)
@@ -164,10 +164,15 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 	});
 	const editedMark = (meta && meta.edited) ? `<span class="msg-edited">${escapeHTML(t('ui.edited', '(edited)'))}</span>` : '';
 	const burnMark = (meta && meta.ttl) ? `<span class="msg-burn">🔥${meta.ttl < 60 ? meta.ttl + 's' : (meta.ttl / 60) + 'm'}</span>` : '';
+	// P1-C: read-receipt chip on own bubbles, revealed when peers confirm.
+	// P1-C: 自己气泡上的已读徽标，对端确认后亮起。
+	const readChipHtml = (meta && meta.read)
+		? `<span class="msg-read">✓✓</span>`
+		: (safeMid ? `<span class="msg-read" hidden>✓✓</span>` : '');
 	const div = createElement('div', {
 		class: className,
 		...(safeMid ? { 'data-mid': safeMid } : {})
-	}, `<span class="bubble-content">${quoteHtml}${contentHtml}${editedMark}</span>${actionsHtml}<span class="bubble-meta">${burnMark}${time}</span>`);
+	}, `<span class="bubble-content">${quoteHtml}${contentHtml}${editedMark}</span>${actionsHtml}<span class="bubble-meta">${burnMark}${time}${readChipHtml}</span>`);
 	chatArea.appendChild(div);
 	if (safeMid) renderReactions(safeMid);
 	const rdBurn = roomsData[activeRoomIndex];
@@ -1049,4 +1054,57 @@ export function setupBurnBtn() {
 			? '🔥 ' + (burnTtl < 60 ? burnTtl + 's' : (burnTtl / 60) + 'm')
 			: t('ui.burn_off', 'Burn timer: off')
 	})
+}
+
+// ==================== P1-C: read receipts ====================
+// 已读回执。原则（RULES.md 对照）：
+// - 只在窗口「可见 + 聚焦」时把看过的消息 id 排队上报——不看就是没读
+// - 700ms 防抖合并批量发送，上限 50 条/批
+// - 纯 id 信号，走 E2EE 内容层，服务器盲转发
+
+let readReceiptSender = null;      // injected by main.js: (ids) => chat.sendReadReceipts(ids)
+const pendingReadIds = new Set();
+let readFlushTimer = null;
+
+// main.js 注入实际发送函数（解耦 chat.js 与 NodeCrypt）
+export function setReadReceiptSender(fn) {
+	readReceiptSender = typeof fn === 'function' ? fn : null
+}
+
+// Queue a message id as "seen". Callers must check visibility themselves or
+// use isWindowReading(), kept here so the rule lives in one place.
+// 排队一条「已看」消息 id。可见性判断集中在本模块，规则只写一遍。
+export function isWindowReading() {
+	try {
+		return document.visibilityState === 'visible' && document.hasFocus();
+	} catch (_e) {
+		return false
+	}
+}
+
+export function queueReadReceipt(mid) {
+	const id = String(mid || '');
+	if (!/^[A-Za-z0-9]{8,32}$/.test(id)) return;
+	pendingReadIds.add(id);
+	if (readFlushTimer) return;
+	readFlushTimer = setTimeout(flushReadReceipts, 700)
+}
+
+function flushReadReceipts() {
+	readFlushTimer = null;
+	if (!readReceiptSender || pendingReadIds.size === 0) return;
+	const ids = Array.from(pendingReadIds).slice(0, 50);
+	for (const id of ids) pendingReadIds.delete(id);
+	try {
+		readReceiptSender(ids)
+	} catch (_e) { /* receipt sending is best-effort */ }
+}
+
+// Reveal the ✓✓ chip on one of my own bubbles when a peer confirms reading it.
+// 对端确认已读后，点亮自己气泡上的 ✓✓ 徽标。
+export function markMessageReadDom(mid) {
+	const id = String(mid || '');
+	if (!/^[A-Za-z0-9]{8,32}$/.test(id)) return;
+	const chip = document.querySelector('#chat-area [data-mid="' + id + '"] .msg-read');
+	if (chip) chip.hidden = false
 }

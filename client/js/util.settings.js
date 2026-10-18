@@ -21,6 +21,8 @@ import { t, setLanguage, getCurrentLanguage, initI18n } from './util.i18n.js';
 // P3: dark mode (system-following) + local encrypted history
 import { applyDarkModeSetting } from './util.darkmode.js';
 import { clearAllLocalHistory } from './util.localHistory.js';
+// P1-C: Web Push (generic, payload-free notifications)
+import { enablePush, disablePush, isPushEnabled, isPushSupported } from './util.push.js';
 // Default settings
 // 默认设置
 const DEFAULT_SETTINGS = {
@@ -117,16 +119,26 @@ function setupSettingsPanel() {
 					<span class="slider"></span>
 				</label>
 			</div>
-			<div class="settings-item">
-				<div class="settings-item-label">
-					<div>${t('settings.sound_notifications', 'Sound Notifications')}</div>
-				</div>
-				<label class="switch">
-					<input type="checkbox" id="settings-sound" ${settings.sound ? 'checked' : ''}>
-					<span class="slider"></span>
-				</label>
+		<div class="settings-item">
+			<div class="settings-item-label">
+				<div>${t('settings.sound_notifications', 'Sound Notifications')}</div>
 			</div>
+			<label class="switch">
+				<input type="checkbox" id="settings-sound" ${settings.sound ? 'checked' : ''}>
+				<span class="slider"></span>
+			</label>
 		</div>
+		<div class="settings-item">
+			<div class="settings-item-label">
+				<div>${t('settings.web_push', 'Offline Push (PWA installed)')}</div>
+				<div class="settings-item-desc">${t('settings.web_push_desc', 'Wake this device when a new message arrives while the app is closed. The notification only ever says "you have a new message" — never the room, sender or content. Requires HTTPS.')}</div>
+			</div>
+			<label class="switch">
+				<input type="checkbox" id="settings-web-push" ${isPushEnabled() ? 'checked' : ''}>
+				<span class="slider"></span>
+			</label>
+		</div>
+	</div>
 		<div class="settings-section">
 			<div class="settings-section-title">${t('settings.appearance_privacy', 'Appearance & Privacy')}</div>
 			<div class="settings-item">
@@ -257,6 +269,34 @@ function setupSettingsPanel() {
 		}
 		saveSettings(settings);
 		applySettings(settings)
+	});
+	// P1-C: Web Push toggle. Enable = permission + subscribe + report over
+	// E2EE channel; disable = unsubscribe + withdraw. All best-effort with
+	// clear failure feedback.
+	// P1-C：Web Push 开关。开启 = 权限 + 订阅 + 经 E2EE 通道上报；
+	// 关闭 = 退订 + 撤回。失败给出明确反馈。
+	const webPushCheckbox = $('#settings-web-push', settingsContent);
+	on(webPushCheckbox, 'change', e => {
+		const checked = e.target.checked;
+		if (checked) {
+			if (!isPushSupported()) {
+				alert(t('settings.web_push_unsupported', 'Web Push is not supported in this browser (or the app is not served over HTTPS).'));
+				e.target.checked = false;
+				return
+			}
+			enablePush().then(() => {
+				e.target.checked = true
+			}).catch((err) => {
+				e.target.checked = false;
+				if (err && err.message === 'push-denied') {
+					alert(t('settings.web_push_denied', 'Notification permission was denied. Please allow notifications in your browser settings.'))
+				} else {
+					alert(t('settings.web_push_failed', 'Could not enable offline push. Please try again.'))
+				}
+			})
+		} else {
+			disablePush().catch(() => { /* best-effort */ })
+		}
 	});
 	// P3: dark mode select (auto/light/dark)
 	// P3：深色模式选择

@@ -2543,3 +2543,21 @@ html[data-mode="dark"] .chat-burn-btn.active {
 	color: #f0932a;
 	background: rgba(240, 147, 42, .15);
 }
+
+/* ==================== P1-C: read receipts ==================== */
+
+/* ✓✓ read chip on own bubbles; hidden until a peer confirms */
+.msg-read {
+	font-size: 11px;
+	margin-left: 4px;
+	color: #357ae8;
+	font-weight: 600;
+	letter-spacing: -1px;
+}
+.msg-read[hidden] {
+	display: none;
+}
+
+html[data-mode="dark"] .msg-read {
+	color: #7aa7f0;
+}

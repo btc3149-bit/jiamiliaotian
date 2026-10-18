@@ -17,8 +17,12 @@ import {
 	recallMessageLocal,
 	burnMessageLocal,
 	applyEditLocal,
-	armBurnTimer
+	armBurnTimer,
+	queueReadReceipt,
+	isWindowReading,
+	markMessageReadDom
 } from './chat.js';
+import { reportPushSubscription } from './util.push.js';
 import {
 	renderMainHeader,
 	renderUserList
@@ -36,6 +40,9 @@ import {
 	loadLocalHistory,
 	appendLocalHistory
 } from './util.localHistory.js';
+// P1-C note: roomsData is exported at the file tail (export { roomsData, ... });
+// util.push.js reads it via the injected accessor, not via import.
+// P1-C 说明：roomsData 在文件尾部导出；util.push.js 通过注入的访问器读取。
 let roomsData = [];
 let activeRoomIndex = -1;
 
@@ -206,6 +213,14 @@ export function joinRoom(userName, roomName, password, modal = null, onResult) {
 	const callbacks = {
 		onServerClosed: () => {
 			setStatus('Node connection closed');
+			// P1-C: honest reconnect notice. Server persists nothing (RULES
+			// invariant), so messages sent during the gap cannot be backfilled
+			// from the server — tell the user instead of silently losing them.
+			// P1-C: 诚实的重连提示。服务器零持久化（RULES 不变量），断线窗口内
+			// 的消息无从补拉，明确告知而不是无声丢失。
+			try {
+				addSystemMsg(t('system.reconnecting', 'Connection lost — reconnecting. Messages sent while offline may be missing.'));
+			} catch (_e) { /* room list may not be ready yet */ }
 			if (onResult && !closed) {
 				closed = true;
 				onResult(false)
@@ -233,7 +248,8 @@ export function joinRoom(userName, roomName, password, modal = null, onResult) {
 		onClientReaction: (r) => handleClientReaction(idx, r),
 		onClientTyping: (msg) => handleClientTyping(idx, msg),
 		onClientEdit: (r) => handleClientEdit(idx, r),
-		onClientDelete: (r) => handleClientDelete(idx, r)
+		onClientDelete: (r) => handleClientDelete(idx, r),
+		onClientReadReceipt: (r) => handleClientReadReceipt(idx, r)
 	};
 	const chatInst = new window.NodeCrypt(window.config, callbacks);
 	roomsData[idx].chat = chatInst;
@@ -273,6 +289,16 @@ export function handleClientList(idx, list, selfId) {
 	if (rd.initCount === 2) {
 		rd.isInitialized = true;
 		rd.knownUserIds = new Set(list.map(u => u.clientId))
+	}
+	// P1-C: report push subscription on first init and again at most every
+	// 5 minutes — server-side subscription storage can be evicted with the
+	// DO, and re-reporting is an idempotent no-op for the server.
+	// P1-C: 首次建立后上报，之后每 5 分钟最多重报一次（DO 存储可能被驱逐；
+	// 重报对服务器是幂等操作）。
+	const nowTs = Date.now();
+	if (!rd._lastPushReport || (nowTs - rd._lastPushReport) > 5 * 60 * 1000) {
+		rd._lastPushReport = nowTs;
+		reportPushSubscription(rd.chat);
 	}
 }
 
@@ -379,6 +405,27 @@ export function handleClientDelete(idx, r) {
 	if (!entry || entry.burned || entry.deleted) return;
 	if (!entry.author || !r.clientId || entry.author !== r.clientId) return;
 	recallMessageLocal(rd, r.targetId)
+}
+
+// P1-C: handle read receipts from a peer. Only OUR OWN messages can be
+// marked read by someone else's receipt — the ids listed are ones the peer
+// actually saw (their window was visible + focused).
+// P1-C：处理对端已读回执。别人的回执只能标记「我发的」消息——id 是对方
+// 确实看过（窗口可见且聚焦）的。
+export function handleClientReadReceipt(idx, r) {
+	const rd = roomsData[idx];
+	if (!rd || !r || !Array.isArray(r.ids)) return;
+	let changed = false;
+	for (const mid of r.ids) {
+		if (!mid || !/^[A-Za-z0-9]{8,32}$/.test(mid)) continue;
+		const entry = rd.messages.find(m => m.id === mid && m.type === 'me');
+		if (entry && !entry.read) {
+			entry.read = true;
+			changed = true;
+			if (activeRoomIndex === idx) markMessageReadDom(mid)
+		}
+	}
+	void changed; // DOM updated per-id above; history re-render picks up entry.read
 }
 
 // Handle client message event
@@ -495,6 +542,15 @@ export function handleClientMessage(idx, msg) {
 		id: msg.id || null,
 		ttl: msg.ttl || null
 	});
+
+	// P1-C: if the user is actually looking at the message right now, queue a
+	// read receipt (debounced batch). Mark entry so background backlog
+	// scanning in main.js skips it.
+	// P1-C: 用户此刻真在看着这条消息就排队已读回执（防抖合并）。
+	if (msg.id && isWindowReading()) {
+		roomsData[idx].messages[roomsData[idx].messages.length - 1].readSent = true;
+		queueReadReceipt(msg.id)
+	}
 
 	// Only add message to chat display if it's for the active room
 	if (activeRoomIndex === idx) {

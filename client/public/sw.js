@@ -7,7 +7,7 @@
 // - WebSocket 连接与所有动态请求一律直连网络，SW 不拦截、不落盘。
 // - 缓存键带版本号，发版后旧缓存整体清除，避免新旧资源错配。
 
-const VERSION = 'jmlt-pwa-v1';
+const VERSION = 'jmlt-pwa-v2';
 const SHELL_CACHE = `${VERSION}-shell`;
 
 // 预缓存：应用入口 + 清单 + 图标。JS/CSS 由运行时 SWR 策略补充。
@@ -39,6 +39,43 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('message', (event) => {
 	if (event.data === 'SKIP_WAITING') self.skipWaiting();
+});
+
+// ==================== Web Push (P1-C) ====================
+// 推送 payload 为空（服务器零知识设计）——本 handler 只做两件事：
+// 1) 应用在前台可见时静默吞掉推送（零打扰）；
+// 2) 否则弹一条泛化通知：「有新消息」。不含房间名、发送者、内容，
+//    因为推送本身就不携带任何这些信息。
+self.addEventListener('push', (event) => {
+	event.waitUntil((async () => {
+		let visible = false;
+		try {
+			const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+			visible = clientList.some((c) => c.visibilityState === 'visible');
+		} catch (_err) {
+			visible = false;
+		}
+		if (visible) return;
+		await self.registration.showNotification('加米辽田', {
+			body: '💬 你有新消息 / You have a new message',
+			icon: './icons/icon-192.png',
+			badge: './icons/icon-192.png',
+			tag: 'jmlt-new-message',
+			renotify: false
+		});
+	})());
+});
+
+// 点击通知：聚焦已有窗口或打开应用
+self.addEventListener('notificationclick', (event) => {
+	event.notification.close();
+	event.waitUntil((async () => {
+		const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+		for (const client of clientList) {
+			if ('focus' in client) return client.focus();
+		}
+		return self.clients.openWindow('./');
+	})());
 });
 
 // 静态资源扩展名白名单（含 vite 产物 hash 文件名）
