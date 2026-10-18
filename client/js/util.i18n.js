@@ -74,6 +74,11 @@ const LANGUAGES = {
 			'settings.web_push_denied': 'Notification permission was denied. Please allow notifications in your browser settings.',
 			'settings.web_push_failed': 'Could not enable offline push. Please try again.',
 			'settings.language_switch': 'Language',
+			'settings.server_url': 'Server URL (desktop app)',
+			'settings.server_url_desc': 'Only used by the bundled desktop app: the https:// address of your own deployment. Leave empty to use the server this page was loaded from.',
+			'settings.server_url_apply': 'Apply Server URL',
+			'settings.server_url_save': 'Save & Reload',
+			'settings.server_url_invalid': 'Please enter a valid https:// URL (or leave empty to use the current server).',
 			'settings.chinese': 'Chinese',
 			'settings.english': 'English',
 			
@@ -231,6 +236,11 @@ const LANGUAGES = {
 			'settings.web_push_denied': '通知权限被拒绝，请在浏览器设置中允许通知。',
 			'settings.web_push_failed': '离线推送开启失败，请重试。',
 			'settings.language_switch': '语言',
+			'settings.server_url': '服务器地址（桌面应用）',
+			'settings.server_url_desc': '仅桌面应用使用：填写你自己部署的 https:// 地址。留空则使用页面当前所在的服务器。',
+			'settings.server_url_apply': '应用服务器地址',
+			'settings.server_url_save': '保存并刷新',
+			'settings.server_url_invalid': '请输入合法的 https:// 地址（或留空使用当前服务器）。',
 			'settings.chinese': '中文',
 			'settings.english': 'English',
 			

@@ -1,0 +1,85 @@
+# Desktop builds (Tauri 2): Windows / macOS / Linux
+# 手动触发或打 tag 时构建；产物上传为 workflow artifacts。
+# SECURITY: 依赖全部来自 npm/ crates.io，不经第三方镜像；无签名密钥，
+# macOS 产物为 ad-hoc 签名（首启需右键打开）。
+name: Desktop Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ''
+          - platform: macos-latest
+            args: ''
+          - platform: ubuntu-22.04
+            args: ''
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      - name: Install Linux deps (webkit2gtk)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+
+      - name: Build web client
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+
+      - name: Derive Tauri icons (.icns/.ico) from source PNG
+        run: |
+          npx --yes @tauri-apps/cli@latest icon desktop/src-tauri/icons/icon-source.png -o desktop/src-tauri/icons
+
+      - name: Build desktop bundles
+        working-directory: desktop/src-tauri
+        run: |
+          cargo install tauri-cli --version '^2' --locked
+          cargo tauri build
+
+      - name: Upload artifacts (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: jiamiliaotian-windows
+          path: desktop/src-tauri/target/release/bundle/*/jiamiliaotian.*
+
+      - name: Upload artifacts (macOS)
+        if: matrix.platform == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: jiamiliaotian-macos
+          path: desktop/src-tauri/target/release/bundle/*/jiamiliaotian.*
+
+      - name: Upload artifacts (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        uses: actions/upload-artifact@v4
+        with:
+          name: jiamiliaotian-linux
+          path: |
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage

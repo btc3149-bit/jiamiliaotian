@@ -111,4 +111,20 @@ for (const size of [180, 192, 512]) {
 	writeFileSync(join(OUT_DIR, name), png);
 	console.log(`${name}: ${png.length} bytes`);
 }
+
+// P1-D: `--desktop` mode also emits Tauri icon sizes. The 1024 source is NOT
+// committed (repo weight); CI runs `node scripts/gen-icons.mjs --desktop`
+// then `tauri icon` to derive .icns/.ico from it.
+// P1-D：--desktop 模式额外产出 Tauri 图标。1024 源图不入库，由 CI 现场生成
+// 再用 `tauri icon` 派生 .icns/.ico。
+if (process.argv.includes('--desktop')) {
+	const DESKTOP_ICONS = join(ROOT, 'desktop', 'src-tauri', 'icons');
+	mkdirSync(DESKTOP_ICONS, { recursive: true });
+	for (const size of [32, 128, 256, 1024]) {
+		const name = size === 1024 ? 'icon-source.png' : `${size}x${size}.png`;
+		const png = renderIcon(size);
+		writeFileSync(join(DESKTOP_ICONS, name), png);
+		console.log(`desktop/${name}: ${png.length} bytes`);
+	}
+}
 console.log('done');

@@ -105,10 +105,28 @@ import {	renderUserList,       // 渲染用户列表 / Render user list
 	initFlipCard          // 初始化翻转卡片功能 / Initialize flip card functionality
 } from './ui.js';
 
+// P1-D: optional server override for desktop shells (Tauri bundles the web
+// client as a local asset, so "same-origin" no longer points at the backend).
+// Priority: ?server= URL param > settings panel value (localStorage) > same-origin.
+// SECURITY: the override only changes which E2EE server the client talks to;
+// all crypto stays client-side. Desktop shells must use https/wss.
+// P1-D: 桌面壳（Tauri）的服务器地址覆盖——前端作为本地资源打包，"同源"不再
+// 指向后端。优先级：?server= 参数 > 设置面板（localStorage）> 同源。
+const serverUrlParam = (() => {
+	try { return new URLSearchParams(window.location.search).get('server') || ''; } catch (_e) { return ''; }
+})();
+const serverUrlStored = (() => {
+	try { return localStorage.getItem('jmlt_server_url') || ''; } catch (_e) { return ''; }
+})();
+const serverUrl = (serverUrlParam || serverUrlStored).trim().replace(/\/+$/, '');
+window.JMLT_SERVER_URL = serverUrl;
+
 // 设置全局配置参数
 // Set global configuration parameters
 window.config = {
-	wsAddress: `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`, // WebSocket 服务器地址 / WebSocket server address
+	wsAddress: serverUrl
+		? serverUrl.replace(/^http/i, 'ws') // http(s):// → ws(s):// / 桌面壳显式指定服务器
+		: `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`, // WebSocket 服务器地址 / WebSocket server address
 	//wsAddress: `wss://crypt.works`,
 	debug: false                      // SECURITY: 生产环境必须关闭调试（开启会把解密内容打进 console）/ Must stay off in production
 };

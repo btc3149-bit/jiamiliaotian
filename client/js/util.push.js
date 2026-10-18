@@ -38,10 +38,12 @@ function urlBase64ToUint8Array(base64UrlString) {
 	return output;
 }
 
-// 从服务器取 VAPID 公钥（public by design，缓存进程内）
+// 从服务器取 VAPID 公钥（public by design，缓存进程内）。
+// P1-D: 桌面壳下用 JMLT_SERVER_URL 覆盖（页面本身是本地资源）。
 async function getVapidPublicKey() {
 	if (!vapidKeyPromise) {
-		vapidKeyPromise = fetch('/api/vapid', { credentials: 'same-origin' })
+		const base = (typeof window !== 'undefined' && window.JMLT_SERVER_URL) || '';
+		vapidKeyPromise = fetch(base + '/api/vapid', { credentials: 'same-origin' })
 			.then((res) => {
 				if (!res.ok) throw new Error('vapid-unavailable');
 				return res.json();

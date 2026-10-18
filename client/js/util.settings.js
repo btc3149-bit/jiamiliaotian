@@ -92,6 +92,15 @@ function askNotificationPermission(callback) {
 	}
 }
 
+// P1-D: read + escape the stored server URL for the settings input value.
+// 读取并转义存储的服务器地址（输入框 value 属性防注入）。
+function escapeHTMLServerUrl(value) {
+	return String(value || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function getStoredServerUrl() {
+	try { return localStorage.getItem('jmlt_server_url') || ''; } catch (_e) { return ''; }
+}
+
 // Setup the settings panel UI
 // 设置设置面板 UI
 function setupSettingsPanel() {
@@ -183,6 +192,21 @@ function setupSettingsPanel() {
 						<option value="zh" ${settings.language === 'zh' ? 'selected' : ''}>🇨🇳 中文</option>
 					</select>
 				</div>
+			</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.server_url', 'Server URL (desktop app)')}</div>
+					<div class="settings-item-desc">${t('settings.server_url_desc', 'Only used by the bundled desktop app: the https:// address of your own deployment. Leave empty to use the server this page was loaded from.')}</div>
+				</div>
+				<div class="language-selector">
+					<input type="text" id="settings-server-url" class="language-select" style="width:220px" placeholder="https://your-worker.example.workers.dev" value="${escapeHTMLServerUrl(getStoredServerUrl())}">
+				</div>
+			</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.server_url_apply', 'Apply Server URL')}</div>
+				</div>
+				<button type="button" id="settings-server-url-save" class="settings-danger-btn" style="background:#357ae8;color:#fff">${t('settings.server_url_save', 'Save & Reload')}</button>
 			</div>
 		</div>
 		
@@ -326,6 +350,32 @@ function setupSettingsPanel() {
 	on(clearHistoryBtn, 'click', () => {
 		const removed = clearAllLocalHistory();
 		window.addSystemMsg && window.addSystemMsg(t('system.history_cleared', 'Local message history cleared (encrypted blobs removed).') + ` [${removed}]`)
+	});
+	// P1-D: desktop-shell server URL (localhost-bundled client → remote worker).
+	// Validation: empty (revert to same-origin) or a valid https URL. Reload
+	// applies it because the WS address is computed at boot.
+	// P1-D：桌面壳服务器地址。校验：留空（回到同源）或合法 https 地址；
+	// 保存后刷新页面使 WS 地址生效。
+	const serverUrlInput = $('#settings-server-url', settingsContent);
+	const serverUrlSaveBtn = $('#settings-server-url-save', settingsContent);
+	on(serverUrlSaveBtn, 'click', () => {
+		const raw = (serverUrlInput ? serverUrlInput.value : '').trim();
+		if (raw === '') {
+			try { localStorage.removeItem('jmlt_server_url'); } catch (_e) { /* ignore */ }
+			window.location.reload();
+			return
+		}
+		let ok = false;
+		try {
+			const parsed = new URL(raw);
+			ok = parsed.protocol === 'https:' && !parsed.username && !parsed.password;
+		} catch (_e) { ok = false }
+		if (!ok) {
+			alert(t('settings.server_url_invalid', 'Please enter a valid https:// URL (or leave empty to use the current server).'));
+			return
+		}
+		try { localStorage.setItem('jmlt_server_url', raw); } catch (_e) { /* ignore */ }
+		window.location.reload();
 	});
 	// Theme selection event handlers
 	// 主题选择事件处理

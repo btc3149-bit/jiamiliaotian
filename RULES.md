@@ -80,8 +80,8 @@
 | P1 | 阅后即焚/定时销毁 | 客户端本地定时，到期撤回 ✅（关/30s/5m/1h，同步从加密本地历史剔除） |
 | P1 | Web Push 离线通知 | VAPID + 空 payload（仅"有新消息"信号，不含房间/发送者/内容）✅（不变量8；VAPID 密钥 DO 懒生成，/api/vapid 下发公钥，零配置） |
 | P1 | 断线补拉 + 已读回执 | 已读回执 ✅（可见+聚焦才上报，700ms 防抖）；断线补拉改为诚实提示 + 在线同伴重播（见 P2） |
-| P1 | 桌面端（Tauri 2） | 封装现有 web client，系统通知/托盘 |
-| P2 | 移动端（Android/iOS） | Tauri 2 mobile / Capacitor 复用 web client |
+| P1 | 桌面端（Tauri 2） | 壳零原生 IPC 能力，捆绑 web client + 用户自填服务器地址（https 校验），CI 三平台构建 ✅ |
+| P2 | 移动端（Android/iOS） | Tauri 2 mobile / Capacitor 复用 web client（desktop/README.md 含完整脚手架命令；签名/上架需本机 SDK） |
 | P2 | 断线补拉（在线同伴重播） | 重连后广播 sync 请求，在线同伴重发内存中近期消息，按 id 去重（服务器零持久化不变，内容只在同伴间流动） |
 | P2 | 密钥 QR 迁移 | 房间密钥加密导出/导入，免重输密码 |
 | P2 | 本地加密历史搜索 | 内存解密匹配，明文不落盘 |
