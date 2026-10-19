@@ -1,5 +1,6 @@
 # Desktop builds (Tauri 2): Windows / macOS / Linux
-# 手动触发或打 tag 时构建；产物上传为 workflow artifacts。
+# 手动触发或打 tag 时构建；产物上传为 workflow artifacts，
+# tag 构建额外挂载到 GitHub Releases 页面（发布版本 + 安装包）。
 # SECURITY: 依赖全部来自 npm/ crates.io，不经第三方镜像；无签名密钥，
 # macOS 产物为 ad-hoc 签名（首启需右键打开）。
 name: Desktop Build
@@ -9,6 +10,9 @@ on:
   push:
     tags:
       - 'v*'
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -81,5 +85,36 @@ jobs:
         with:
           name: jiamiliaotian-linux
           path: |
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+
+      # Release: attach this platform's bundles to the GitHub Release for the
+      # pushed tag (softprops merges all matrix legs into the same release;
+      # it creates the release if it does not exist yet).
+      # 发布：tag 构建时把本平台安装包挂到对应的 GitHub Release。
+      - name: Attach bundles to GitHub Release (Windows)
+        if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'windows-latest'
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: false
+          files: |
+            desktop/src-tauri/target/release/bundle/msi/*.msi
+            desktop/src-tauri/target/release/bundle/nsis/*.exe
+
+      - name: Attach bundles to GitHub Release (macOS)
+        if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'macos-latest'
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: false
+          files: |
+            desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz
+
+      - name: Attach bundles to GitHub Release (Linux)
+        if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'ubuntu-22.04'
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: false
+          files: |
             desktop/src-tauri/target/release/bundle/deb/*.deb
             desktop/src-tauri/target/release/bundle/appimage/*.AppImage

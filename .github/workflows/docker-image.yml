@@ -1,13 +1,22 @@
+# Docker image: build & push to GHCR on main pushes and version tags.
+# 镜像发布：main 推送构建 latest，打 v* tag 额外推版本号标签。
+# SECURITY: GITHUB_TOKEN 仅授予 packages:write，不授予其他权限。
 name: Docker Build and Push
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
+
+permissions:
+  contents: read
+  packages: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    if: github.repository == 'shuaiplus/nodecrypt'
+    if: github.repository == 'btc3149-bit/jiamiliaotian'
     steps:
       - uses: actions/checkout@v4
       - name: Log in to GitHub Container Registry
@@ -16,11 +25,18 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Docker meta (tags)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/btc3149-bit/jiamiliaotian
+          tags: |
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/heads/main') }}
+            type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
         with:
           context: .
           push: true
-          tags: |
-            ghcr.io/shuaiplus/nodecrypt:latest
-            ghcr.io/shuaiplus/nodecrypt:${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
