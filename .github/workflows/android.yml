@@ -1,0 +1,96 @@
+# Android build (Tauri 2 mobile): arm64 APK, debug-signed
+# 手动触发或打 tag 时构建；产物挂到 GitHub Releases。
+# SECURITY: 依赖全部来自 npm/ crates.io / maven central；debug 签名 APK
+# （安装需允许未知来源）。正式分发签名需用户自有 keystore，本管线不持有。
+name: Android Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust with Android target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build web client
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+
+      - name: Derive Tauri icons from source PNG
+        run: |
+          npx --yes @tauri-apps/cli@latest icon desktop/src-tauri/icons/icon-source.png -o desktop/src-tauri/icons
+
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version '^2' --locked
+
+      - name: Resolve Android SDK / NDK env (runner-preinstalled)
+        run: |
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          NDK_DIR=$(ls -d "$SDK"/ndk/* 2>/dev/null | sort -V | tail -1)
+          if [ -z "$NDK_DIR" ]; then
+            echo "No preinstalled NDK found" >&2; exit 1
+          fi
+          echo "NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          echo "Using NDK: $NDK_DIR"
+
+      - name: Init Android project (generated in CI, not committed)
+        working-directory: desktop/src-tauri
+        run: cargo tauri android init
+
+      - name: Build arm64 debug APK (debug-signed = installable without release keystore)
+        working-directory: desktop/src-tauri
+        run: cargo tauri android build --apk --debug --target aarch64
+
+      - name: Collect APK with clean name
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          mkdir -p release-assets
+          APK=$(find desktop/src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -1)
+          if [ -z "$APK" ]; then echo "No APK produced" >&2; exit 1; fi
+          cp "$APK" "release-assets/jiamiliaotian_${VER}_android_arm64.apk"
+          ls -la release-assets
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jiamiliaotian-android
+          path: release-assets/*.apk
+          if-no-files-found: error
+
+      - name: Attach APK to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: false
+          files: release-assets/*.apk
