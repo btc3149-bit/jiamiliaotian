@@ -1,9 +1,16 @@
 [package]
 name = "jiamiliaotian"
-version = "1.0.0"
-description = "True end-to-end encrypted chat, desktop shell"
+version = "1.0.1"
+description = "True end-to-end encrypted chat, desktop & mobile shell"
 authors = ["jiamiliaotian"]
 edition = "2021"
+
+# Tauri 2 mobile (Android/iOS) builds the crate as a library (`--lib`);
+# desktop keeps using the bin. lib+bin split is required for both.
+# Tauri 2 移动端以库目标编译（--lib），桌面端仍走 bin，lib+bin 双结构为移动端必需。
+[lib]
+name = "jiamiliaotian_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
