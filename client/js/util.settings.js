@@ -23,6 +23,8 @@ import { applyDarkModeSetting } from './util.darkmode.js';
 import { clearAllLocalHistory } from './util.localHistory.js';
 // P1-C: Web Push (generic, payload-free notifications)
 import { enablePush, disablePush, isPushEnabled, isPushSupported } from './util.push.js';
+// v1.1.0 #2: panic wipe (double-confirmed local data removal)
+import { panicWipeWithConfirm } from './util.panic.js';
 // Default settings
 // 默认设置
 const DEFAULT_SETTINGS = {
@@ -30,7 +32,8 @@ const DEFAULT_SETTINGS = {
 	sound: false,
 	theme: 'theme1',
 	darkMode: 'auto', // 'auto' 跟随系统 | 'light' | 'dark'
-	localHistory: false // 本地加密消息历史（可选，默认关闭）
+	localHistory: false, // 本地加密消息历史（可选，默认关闭）
+	sendOriginal: false // v1.1.0 #10：发送原图（默认关 = 自动压缩 + 剥 EXIF）
 	// 注意：我们不设置默认语言，让系统自动检测浏览器语言
 	// Note: We don't set a default language, let the system auto-detect browser language
 };
@@ -59,7 +62,8 @@ function saveSettings(settings) {
 		theme,
 		language,
 		darkMode,
-		localHistory
+		localHistory,
+		sendOriginal
 	} = settings;
 	localStorage.setItem('settings', JSON.stringify({
 		notify,
@@ -67,7 +71,8 @@ function saveSettings(settings) {
 		theme,
 		language,
 		darkMode,
-		localHistory
+		localHistory,
+		sendOriginal
 	}))
 }
 
@@ -99,6 +104,23 @@ function escapeHTMLServerUrl(value) {
 }
 function getStoredServerUrl() {
 	try { return localStorage.getItem('jmlt_server_url') || ''; } catch (_e) { return ''; }
+}
+
+// v1.1.0 #5: current room's channel hash, used as the per-room mute key.
+// roomsData/activeRoomIndex live on window (same pattern as util.file.js) to
+// avoid a circular import with room.js.
+// v1.1.0 #5：当前房间的 channel hash，用作房间静音键。roomsData/
+// activeRoomIndex 走 window（与 util.file.js 同款模式，避免与 room.js 循环导入）。
+function currentRoomHash() {
+	try {
+		const rd = window.roomsData && window.roomsData[window.activeRoomIndex];
+		return rd && rd.chat && rd.chat.credentials ? rd.chat.credentials.channel : '';
+	} catch (_e) { return ''; }
+}
+function currentRoomMuted() {
+	const h = currentRoomHash();
+	if (!h) return false;
+	try { return localStorage.getItem('jmlt_mute_' + h) === '1'; } catch (_e) { return false; }
 }
 
 // Setup the settings panel UI
@@ -178,6 +200,33 @@ function setupSettingsPanel() {
 					<div class="settings-item-desc">${t('settings.clear_history_desc', 'Delete all locally stored encrypted message history from this device.')}</div>
 				</div>
 				<button type="button" id="settings-clear-history" class="settings-danger-btn">${t('settings.clear_history_btn', 'Clear')}</button>
+			</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.send_original', 'Send Original Images')}</div>
+					<div class="settings-item-desc">${t('settings.send_original_desc', 'By default images are re-drawn locally before sending: EXIF metadata (including GPS and device info) is stripped and large photos are compressed. Turn this on to send the untouched original file instead.')}</div>
+				</div>
+				<label class="switch">
+					<input type="checkbox" id="settings-send-original" ${settings.sendOriginal ? 'checked' : ''}>
+					<span class="slider"></span>
+				</label>
+			</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.mute_room', 'Mute This Room (front-end only)')}</div>
+					<div class="settings-item-desc">${t('settings.mute_room_desc', 'Silence desktop notifications and sounds for the currently open room on this device. Note: background Web Push wake-ups still occur (they never contain content).')}</div>
+				</div>
+				<label class="switch">
+					<input type="checkbox" id="settings-mute-room" ${currentRoomMuted() ? 'checked' : ''} ${currentRoomHash() ? '' : 'disabled'}>
+					<span class="slider"></span>
+				</label>
+			</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.panic_wipe', 'Panic Wipe')}</div>
+					<div class="settings-item-desc">${t('settings.panic_wipe_desc', 'Immediately erase EVERYTHING this app stored on this device: room key pins, settings, drafts, encrypted history and caches. Requires double confirmation and cannot be undone.')} ${t('settings.panic_wipe_hotkey', 'Shortcut: Ctrl+Shift+Backspace.')}</div>
+				</div>
+				<button type="button" id="settings-panic-wipe" class="settings-danger-btn">${t('settings.panic_wipe_btn', 'Wipe Everything')}</button>
 			</div>
 		</div>
 				<div class="settings-section">
@@ -350,6 +399,30 @@ function setupSettingsPanel() {
 	on(clearHistoryBtn, 'click', () => {
 		const removed = clearAllLocalHistory();
 		window.addSystemMsg && window.addSystemMsg(t('system.history_cleared', 'Local message history cleared (encrypted blobs removed).') + ` [${removed}]`)
+	});
+	// v1.1.0 #10: send-original toggle (default off = auto compress + EXIF strip)
+	const sendOriginalCheckbox = $('#settings-send-original', settingsContent);
+	on(sendOriginalCheckbox, 'change', e => {
+		settings.sendOriginal = !!e.target.checked;
+		saveSettings(settings);
+	});
+	// v1.1.0 #5: per-room mute toggle (front-end notifications only)
+	const muteRoomCheckbox = $('#settings-mute-room', settingsContent);
+	on(muteRoomCheckbox, 'change', e => {
+		const hash = currentRoomHash();
+		if (!hash) {
+			e.target.checked = false;
+			return;
+		}
+		try {
+			if (e.target.checked) localStorage.setItem('jmlt_mute_' + hash, '1');
+			else localStorage.removeItem('jmlt_mute_' + hash);
+		} catch (_e) { /* storage unavailable */ }
+	});
+	// v1.1.0 #2: panic wipe (double-confirmed inside panicWipeWithConfirm)
+	const panicWipeBtn = $('#settings-panic-wipe', settingsContent);
+	on(panicWipeBtn, 'click', () => {
+		panicWipeWithConfirm();
 	});
 	// P1-D: desktop-shell server URL (localhost-bundled client → remote worker).
 	// Validation: empty (revert to same-origin) or a valid https URL. Reload
@@ -682,7 +755,19 @@ function showDesktopNotification(roomName, text, msgType, sender) {
 
 // Notify message entry point
 // 通知消息主入口
-export function notifyMessage(roomName, msgType, text, sender) {
+// v1.1.0 #5: roomHash (5th arg, optional) keys the per-room mute flag
+// `jmlt_mute_<hash>` in localStorage. Frontend-only honesty boundary: mutes
+// desktop notifications and sounds on THIS device while the app is open; Web
+// Push wake-ups are out of scope (worker-driven, payload-free).
+// v1.1.0 #5：第 5 参 roomHash（可选）对应 localStorage 的 `jmlt_mute_<hash>`
+// 房间静音标志。诚实边界：只静音本设备前台时的桌面通知/声音；Web Push 唤醒
+// 由 worker 驱动（无载荷），不在此范围。
+export function notifyMessage(roomName, msgType, text, sender, roomHash) {
+	if (roomHash) {
+		try {
+			if (localStorage.getItem('jmlt_mute_' + roomHash) === '1') return;
+		} catch (_e) { /* storage unavailable — don't mute */ }
+	}
 	const settings = loadSettings();
 	if (settings.notify) {
 		showDesktopNotification(roomName, text, msgType, sender)

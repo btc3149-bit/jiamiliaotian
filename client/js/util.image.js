@@ -46,6 +46,34 @@ export async function processImage(file, callback) {
 	reader.readAsDataURL(file)
 }
 
+// v1.1.0 #10: convert an image File into a re-drawn webp File before it enters
+// the encrypted file pipeline. Canvas redraw strips EXIF (GPS/model etc.) and
+// re-encode caps resolution + shrinks payload. Returns null when the input is
+// not a convertible still image (gif keeps animation — never redraw it).
+// v1.1.0 #10：把图片 File 重绘为 webp 后再进加密文件管道。canvas 重绘剥 EXIF
+// （GPS/机型等元数据），同时限制分辨率并压缩体积。不可转换（gif 保动图）返回 null。
+export function imageFileToCleanFile(file) {
+	return new Promise((resolve) => {
+		if (!file || typeof file.type !== 'string') return resolve(null);
+		if (!file.type.startsWith('image/')) return resolve(null);
+		if (file.type === 'image/gif') return resolve(null); // never break animation
+		processImage(file, (dataUrl) => {
+			try {
+				const comma = dataUrl.indexOf(',');
+				const b64 = dataUrl.slice(comma + 1);
+				const bin = atob(b64);
+				const bytes = new Uint8Array(bin.length);
+				for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+				const base = (file.name || 'image').replace(/\.[^.]+$/, '');
+				const clean = new File([bytes], base + '.webp', { type: 'image/webp' });
+				resolve(clean)
+			} catch (_e) {
+				resolve(null)
+			}
+		})
+	})
+}
+
 // Translate message key
 // 翻译消息 key
 function t(key) {

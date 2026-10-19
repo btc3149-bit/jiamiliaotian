@@ -2,6 +2,21 @@
 // 导入必要的模块
 import { deflate, inflate } from 'fflate';
 import { showFileUploadModal } from './util.fileUpload.js';
+import { imageFileToCleanFile } from './util.image.js';
+
+// v1.1.0 #10: "send original image" opt-out from settings (default off = auto
+// compress + EXIF strip). Read directly to avoid a circular import with
+// util.settings.js.
+// v1.1.0 #10：「发送原图」设置项（默认关 = 自动压缩 + 剥 EXIF）。直接读
+// localStorage 避免与 util.settings.js 循环导入。
+function isAutoImageCompressEnabled() {
+	try {
+		const s = JSON.parse(localStorage.getItem('settings') || '{}');
+		return !s.sendOriginal
+	} catch (_e) {
+		return true
+	}
+}
 
 // 分卷大小统一配置
 const DEFAULT_VOLUME_SIZE = 256 * 1024; // 512KB
@@ -393,9 +408,23 @@ async function handleFilesUpload(files, onSend) {
 		
 		if (files.length === 1) {
 			// Single file upload
-			const file = files[0];
+			let file = files[0];
 			showProgress();
-			
+
+			// v1.1.0 #10: default pipeline for still images = canvas redraw
+			// (strips EXIF incl. GPS/model, caps 1280px, webp 90%). "Send
+			// original" in settings restores the raw-file path. Gifs pass
+			// through untouched (animation preserved).
+			// v1.1.0 #10：静态图片默认走 canvas 重绘（剥 EXIF 含 GPS/机型、
+			// 限 1280px、webp 90%）。设置里开「发送原图」则保留原始文件。
+			// gif 不重绘（保动图）。
+			if (isAutoImageCompressEnabled()) {
+				try {
+					const cleaned = await imageFileToCleanFile(file);
+					if (cleaned) file = cleaned;
+				} catch (_e) { /* keep original file */ }
+			}
+
 			const { volumes, originalSize, compressedSize, originalHash } = await compressFileToVolumes(file);
 			
 			updateProgress();

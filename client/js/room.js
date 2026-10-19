@@ -359,7 +359,7 @@ export function handleClientSecured(idx, user) {
 		});
 		if (activeRoomIndex === idx) addSystemMsg(msg, true);
 		if (window.notifyMessage) {
-			window.notifyMessage(rd.roomName, 'system', msg)
+			window.notifyMessage(rd.roomName, 'system', msg, '', rd.chat && rd.chat.credentials ? rd.chat.credentials.channel : '')
 		}
 	}
 }
@@ -568,7 +568,7 @@ export function handleClientMessage(idx, msg) {
 
 			const notificationMsgType = msgType.includes('_private') ? 'private file' : 'file';
 			if (window.notifyMessage && msg.data && msg.data.fileName) {
-				window.notifyMessage(newRd.roomName, notificationMsgType, `${msg.data.fileName}`, realUserName);
+				window.notifyMessage(newRd.roomName, notificationMsgType, `${msg.data.fileName}`, realUserName, newRd.chat && newRd.chat.credentials ? newRd.chat.credentials.channel : '');
 			}
 		}
 
@@ -672,9 +672,9 @@ export function handleClientMessage(idx, msg) {
 	if (window.notifyMessage) {
 		// A direct @mention gets its own, more intrusive notification
 		if (mentionsMe) {
-			window.notifyMessage(newRd.roomName, 'mention', msg.data, realUserName);
+			window.notifyMessage(newRd.roomName, 'mention', msg.data, realUserName, newRd.chat && newRd.chat.credentials ? newRd.chat.credentials.channel : '');
 		} else {
-			window.notifyMessage(newRd.roomName, notificationMsgType, msg.data, realUserName);
+			window.notifyMessage(newRd.roomName, notificationMsgType, msg.data, realUserName, newRd.chat && newRd.chat.credentials ? newRd.chat.credentials.channel : '');
 		}
 	}
 }

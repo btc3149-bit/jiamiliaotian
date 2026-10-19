@@ -85,10 +85,15 @@ import {
 	setupBurnBtn,         // P1-B: 焚毁定时按钮 / Burn-timer toggle button
 	setReadReceiptSender, // P1-C: 注入已读回执发送器 / Inject read-receipt sender
 	queueReadReceipt,     // P1-C: 排队已读回执 / Queue a read receipt
-	isWindowReading       // P1-C: 窗口是否处于阅读状态 / Is window in reading state
+	isWindowReading,      // P1-C: 窗口是否处于阅读状态 / Is window in reading state
+	setupSearchUI,        // v1.1.0 #1: 本地历史搜索 / Local history search UI
+	setupSelectModeUI     // v1.1.0 #4: 多选复制/转发 / Multi-select copy/forward UI
 } from './chat.js';
 // P1-C: Web Push 房间表访问器注入 / Web Push room-list accessor injection
 import { registerRoomListAccessor } from './util.push.js';
+
+// v1.1.0 #2: 恐慌清除（双确认）/ Panic wipe (double-confirmed)
+import { panicWipeWithConfirm } from './util.panic.js';
 
 // 从 ui.js 中导入 UI 界面相关的功能
 // Import user interface functions from ui.js
@@ -183,6 +188,9 @@ window.addEventListener('DOMContentLoaded', () => {
 	autofillRoomPwd();	setupInputPlaceholder();
 	setupReactionsUI();
 	setupBurnBtn(); // P1-B: burn-timer toggle in composer
+	// v1.1.0 #1/#4: 本地搜索 + 多选（多选条由 setupSelectModeUI 挂载）
+	setupSearchUI();
+	setupSelectModeUI();
 	setupMoreBtnMenu();
 	// P1-C: give util.push.js read access to the live room list (injected to
 	// avoid a circular module import with room.js)
@@ -601,3 +609,14 @@ document.addEventListener('drop', (e) => {
 
 // P1-A: 初始化 PWA（Service Worker 只缓存静态应用壳，绝不缓存消息内容）
 initPWA();
+
+// v1.1.0 #2: panic hotkey — Ctrl+Shift+Backspace (documented in the settings
+// panel). Double-confirm lives inside panicWipeWithConfirm().
+// v1.1.0 #2：恐慌快捷键 Ctrl+Shift+Backspace（设置面板有文案说明）。
+// 双重确认在 panicWipeWithConfirm() 内部。
+window.addEventListener('keydown', (e) => {
+	if (e.ctrlKey && e.shiftKey && e.key === 'Backspace') {
+		e.preventDefault();
+		panicWipeWithConfirm();
+	}
+});
