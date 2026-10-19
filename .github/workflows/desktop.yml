@@ -1,6 +1,7 @@
-# Desktop builds (Tauri 2): Windows / macOS / Linux
+# Desktop builds (Tauri 2): Windows / macOS (arm64 + Intel) / Linux
 # 手动触发或打 tag 时构建；产物上传为 workflow artifacts，
 # tag 构建额外挂载到 GitHub Releases 页面（发布版本 + 安装包）。
+# macOS 出两条腿：arm64（Apple Silicon 默认）+ x86_64（Intel，--target 交叉编译）。
 # SECURITY: 依赖全部来自 npm/ crates.io，不经第三方镜像；无签名密钥，
 # macOS 产物为 ad-hoc 签名（首启需右键打开）。
 name: Desktop Build
@@ -24,6 +25,10 @@ jobs:
             args: ''
           - platform: macos-latest
             args: ''
+            suffix: arm64
+          - platform: macos-latest
+            args: '--target x86_64-apple-darwin'
+            suffix: intel
           - platform: ubuntu-22.04
             args: ''
     runs-on: ${{ matrix.platform }}
@@ -38,6 +43,12 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      # Intel mac leg compiles for x86_64: add the cross target to the toolchain.
+      # Intel 腿交叉编译 x86_64：向工具链添加目标三元组。
+      - name: Add Rust cross target (Intel mac)
+        if: matrix.args == '--target x86_64-apple-darwin'
+        run: rustup target add x86_64-apple-darwin
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -63,7 +74,7 @@ jobs:
         working-directory: desktop/src-tauri
         run: |
           cargo install tauri-cli --version '^2' --locked
-          cargo tauri build
+          cargo tauri build ${{ matrix.args }}
 
       - name: Upload artifacts (Windows)
         if: matrix.platform == 'windows-latest'
@@ -76,8 +87,13 @@ jobs:
         if: matrix.platform == 'macos-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: jiamiliaotian-macos
-          path: desktop/src-tauri/target/release/bundle/*/jiamiliaotian.*
+          name: jiamiliaotian-macos-${{ matrix.suffix }}
+          if-no-files-found: error
+          # `**` covers both plain (target/release) and cross (target/x86_64-apple-darwin/release) layouts
+          # `**` 同时覆盖原生与交叉编译两种目录布局
+          path: |
+            desktop/src-tauri/target/**/bundle/dmg/*.dmg
+            desktop/src-tauri/target/**/bundle/macos/*.app.tar.gz
 
       - name: Upload artifacts (Linux)
         if: matrix.platform == 'ubuntu-22.04'
@@ -107,8 +123,8 @@ jobs:
         with:
           fail_on_unmatched_files: false
           files: |
-            desktop/src-tauri/target/release/bundle/dmg/*.dmg
-            desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz
+            desktop/src-tauri/target/**/bundle/dmg/*.dmg
+            desktop/src-tauri/target/**/bundle/macos/*.app.tar.gz
 
       - name: Attach bundles to GitHub Release (Linux)
         if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'ubuntu-22.04'
