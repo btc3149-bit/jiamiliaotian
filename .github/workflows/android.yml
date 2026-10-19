@@ -1,5 +1,6 @@
-# Android build (Tauri 2 mobile): arm64 APK, debug-signed
+# Android build (Tauri 2 mobile): arm64 + armv7 + x86_64 APKs, debug-signed
 # 手动触发或打 tag 时构建；产物挂到 GitHub Releases。
+# 覆盖矩阵：arm64（现代真机）+ armv7（老 32 位设备）+ x86_64（平板/模拟器/Chromebook）。
 # SECURITY: 依赖全部来自 npm/ crates.io / maven central；debug 签名 APK
 # （安装需允许未知来源）。正式分发签名需用户自有 keystore，本管线不持有。
 name: Android Build
@@ -15,6 +16,19 @@ permissions:
 
 jobs:
   build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64
+            rust_target: aarch64-linux-android
+            arch: arm64
+          - target: armv7
+            rust_target: armv7-linux-androideabi
+            arch: armv7
+          - target: x86_64
+            rust_target: x86_64-linux-android
+            arch: x86_64
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,10 +39,10 @@ jobs:
           node-version: 20
           cache: npm
 
-      - name: Setup Rust with Android target
+      - name: Setup Rust with Android targets
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android
+          targets: ${{ matrix.rust_target }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -68,23 +82,26 @@ jobs:
         working-directory: desktop/src-tauri
         run: cargo tauri android init
 
-      - name: Build arm64 debug APK (debug-signed = installable without release keystore)
+      - name: Build ${{ matrix.arch }} debug APK (debug-signed = installable without release keystore)
         working-directory: desktop/src-tauri
-        run: cargo tauri android build --apk --debug --target aarch64
+        run: cargo tauri android build --apk --debug --target ${{ matrix.target }}
 
       - name: Collect APK with clean name
         run: |
           VER=$(node -p "require('./package.json').version")
           mkdir -p release-assets
-          APK=$(find desktop/src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -1)
+          APK=$(find desktop/src-tauri/gen/android/app/build/outputs/apk -path '*${{ matrix.target }}*' -name '*.apk' | head -1)
+          if [ -z "$APK" ]; then
+            APK=$(find desktop/src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -1)
+          fi
           if [ -z "$APK" ]; then echo "No APK produced" >&2; exit 1; fi
-          cp "$APK" "release-assets/jiamiliaotian_${VER}_android_arm64.apk"
+          cp "$APK" "release-assets/jiamiliaotian_${VER}_android_${{ matrix.arch }}.apk"
           ls -la release-assets
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: jiamiliaotian-android
+          name: jiamiliaotian-android-${{ matrix.arch }}
           path: release-assets/*.apk
           if-no-files-found: error
 
