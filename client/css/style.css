@@ -2799,3 +2799,62 @@ html[data-mode="dark"] .jmlt-fwd-room:hover {
 	background: rgba(122, 167, 240, .12);
 	border-color: #7aa7f0;
 }
+
+/* ==================== v1.2.0: voice / send queue / resume ==================== */
+
+/* composer: voice button (mirrors search/burn buttons) */
+.chat-voice-btn {
+	border: none;
+	background: transparent;
+	cursor: pointer;
+	font-size: 16px;
+	line-height: 1;
+	padding: 4px 6px;
+	border-radius: 8px;
+	color: #808080;
+	align-self: center;
+}
+.chat-voice-btn:hover {
+	background: rgba(0, 0, 0, .06);
+}
+.chat-voice-btn.recording {
+	color: #fff;
+	background: #e74c3c;
+	animation: jmlt-rec-pulse 1.2s ease-in-out infinite;
+}
+@keyframes jmlt-rec-pulse {
+	0%, 100% { opacity: 1; }
+	50% { opacity: .65; }
+}
+
+/* voice message bubble */
+.voice-wrap {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	max-width: 100%;
+}
+.voice-audio {
+	height: 36px;
+	max-width: 230px;
+	vertical-align: middle;
+}
+.voice-dur {
+	font-size: 12px;
+	color: #888;
+	white-space: nowrap;
+}
+.bubble.me .voice-dur {
+	color: rgba(255, 255, 255, .85);
+}
+
+/* dark mode */
+html[data-mode="dark"] .chat-voice-btn {
+	color: #aaa;
+}
+html[data-mode="dark"] .chat-voice-btn:hover {
+	background: rgba(255, 255, 255, .08);
+}
+html[data-mode="dark"] .voice-dur {
+	color: #999;
+}

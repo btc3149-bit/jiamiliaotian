@@ -30,6 +30,21 @@ import {
 	appendLocalHistory,
 	purgeLocalHistory
 } from './util.localHistory.js';
+// v1.2.0 #9: voice message payload validation + duration formatting
+import {
+	sanitizeVoicePayload,
+	formatVoiceDuration
+} from './util.voice.js';
+
+// v1.2.0 #9: render a validated voice payload as an inline audio player.
+// data: URL is escaped and javascript: stripped (same treatment as images).
+// v1.2.0 #9：把校验过的语音载荷渲染为内嵌音频播放器。data: URL 转义并剥
+// javascript:（与图片同等待遇）。
+function renderVoiceHtml(v) {
+	const src = escapeHTML(v.audio).replace(/javascript:/gi, '');
+	return '<span class="voice-wrap"><audio controls preload="metadata" src="' + src + '" class="voice-audio"></audio><span class="voice-dur">🎙 ' + escapeHTML(formatVoiceDuration(v.dur * 1000)) + '</span></span>'
+}
+
 
 // Render the chat area
 // 渲染聊天区域
@@ -153,6 +168,10 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 		contentHtml = renderFileMessage(text, true);
 		// Add file-bubble class for special timestamp positioning
 		className += ' file-bubble';
+	} else if (msgType === 'voice' || msgType === 'voice_private') {
+		// v1.2.0 #9: own voice echo
+		const v = sanitizeVoicePayload(typeof text === 'object' ? text : null);
+		contentHtml = v ? renderVoiceHtml(v) : textToHTML('[voice]');
 	} else {
 		contentHtml = textToHTML(text);
 		if (meta && meta.mentions && meta.mentions.length) {
@@ -244,7 +263,12 @@ export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, 
 		}
 	} else if (msgType === 'file' || msgType === 'file_private') {
 		// Handle file messages
-		contentHtml = renderFileMessage(msg, false);	} else {
+		contentHtml = renderFileMessage(msg, false);
+	} else if (msgType === 'voice' || msgType === 'voice_private') {
+		// v1.2.0 #9: incoming voice message
+		const v = sanitizeVoicePayload(typeof msg === 'object' ? msg : null);
+		contentHtml = v ? renderVoiceHtml(v) : textToHTML('[voice]');
+	} else {
 		contentHtml = textToHTML(msg);
 		if (meta && meta.mentions && meta.mentions.length) {
 			contentHtml = highlightMentionsInHtml(contentHtml, resolveMentionNames(meta.mentions));
@@ -472,10 +496,12 @@ function renderFileMessage(fileData, isSender) {
 			progressWidth = `${progress}%`;
 			statusText = `Sending ${transfer.sentVolumes}/${transfer.totalVolumes}`;
 			showProgress = true;
-		} else if (transfer.status === 'receiving') {
+		} else if (transfer.status === 'receiving' || transfer.status === 'incomplete') {
 			const progress = (transfer.receivedVolumes.size / transfer.totalVolumes) * 100;
 			progressWidth = `${progress}%`;
-			statusText = `Receiving ${transfer.receivedVolumes.size}/${transfer.totalVolumes}`;
+			statusText = transfer.status === 'incomplete'
+				? t('file.waiting_resume', 'Waiting for re-send…')
+				: `Receiving ${transfer.receivedVolumes.size}/${transfer.totalVolumes}`;
 			showProgress = true;
 		} else if (transfer.status === 'completed') {
 			// 完成时不显示任何状态，只显示下载按钮

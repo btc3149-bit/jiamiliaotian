@@ -93,3 +93,33 @@ export function filterValidMids(ids, cap = 50) {
 	if (!Array.isArray(ids)) return [];
 	return ids.filter(isValidMid).slice(0, cap)
 }
+
+// v1.2.0 #17: validate a file-resume request before acting on it. fileId must
+// be transfer-id safe, indices deduped/sorted/in-range, count capped. Returns
+// null when the request is malformed.
+// v1.2.0 #17：校验断点续传请求。fileId 必须是安全的传输 id，分卷下标去重/
+// 排序/在界内，数量封顶。非法返回 null。
+export function sanitizeResumeRequest(fileId, missing, totalVolumes, cap = 512) {
+	if (typeof fileId !== 'string' || !/^[A-Za-z0-9_-]{4,64}$/.test(fileId)) return null;
+	const total = Number(totalVolumes);
+	if (!Number.isInteger(total) || total < 1 || total > 100000) return null;
+	if (!Array.isArray(missing) || missing.length === 0) return null;
+	const seen = new Set();
+	for (const v of missing) {
+		const n = Number(v);
+		if (!Number.isInteger(n) || n < 0 || n >= total) return null;
+		seen.add(n);
+		if (seen.size > cap) return null;
+	}
+	return { fileId, missing: Array.from(seen).sort((a, b) => a - b) }
+}
+
+// v1.2.0 #9: shared validation for resume-side volume payload messages.
+// v1.2.0 #9：续传分卷载荷与 file_volume 同构，这里只做白名单判断。
+export function isValidFileVolumeMessage(msg) {
+	return !!(msg && typeof msg === 'object' &&
+		typeof msg.fileId === 'string' && /^[A-Za-z0-9_-]{4,64}$/.test(msg.fileId) &&
+		Number.isInteger(msg.volumeIndex) && msg.volumeIndex >= 0 &&
+		typeof msg.volumeData === 'string' && msg.volumeData.length > 0 &&
+		msg.volumeData.length <= 1024 * 1024)
+}

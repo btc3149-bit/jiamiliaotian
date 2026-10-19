@@ -7,8 +7,18 @@ import {
 	sanitizeReplayEntry,
 	dedupeReplayBatch,
 	selectReplayable,
-	filterValidMids
+	filterValidMids,
+	sanitizeResumeRequest,
+	isValidFileVolumeMessage
 } from './client/js/util.validate.js';
+import {
+	formatVoiceDuration,
+	isVoiceMsgType,
+	sanitizeVoicePayload
+} from './client/js/util.voice.js';
+import {
+	mergeFlushResults
+} from './client/js/util.sendQueue.js';
 
 let passed = 0;
 let failed = 0;
@@ -107,6 +117,35 @@ console.log('=== test-protocol: read-receipt whitelist ===');
 check('filters valid ids only', JSON.stringify(filterValidMids(['ok123456', 'bad', 'ok654321', null, 7])) === JSON.stringify(['ok123456', 'ok654321']));
 check('caps at 50', filterValidMids(Array.from({ length: 80 }, (_, i) => `mid${String(i).padStart(8, '0')}`)).length === 50);
 check('non-array input', filterValidMids('x').length === 0);
+
+console.log('=== test-protocol: v1.2.0 file resume ===');
+const rr = sanitizeResumeRequest('FileId_123', [5, 2, 5, 0], 10);
+check('valid request passes with deduped sorted indices', !!rr && rr.fileId === 'FileId_123' && JSON.stringify(rr.missing) === JSON.stringify([0, 2, 5]));
+check('rejects bad fileId', sanitizeResumeRequest('bad id!', [0], 10) === null);
+check('rejects out-of-range index', sanitizeResumeRequest('FileId_123', [10], 10) === null);
+check('rejects negative index', sanitizeResumeRequest('FileId_123', [-1], 10) === null);
+check('rejects empty missing', sanitizeResumeRequest('FileId_123', [], 10) === null);
+check('rejects non-array missing', sanitizeResumeRequest('FileId_123', '0', 10) === null);
+check('rejects bad totalVolumes', sanitizeResumeRequest('FileId_123', [0], 0) === null && sanitizeResumeRequest('FileId_123', [0], 'x') === null);
+check('rejects over-cap request', sanitizeResumeRequest('FileId_123', Array.from({ length: 600 }, (_, i) => i), 1000) === null);
+check('accepts exactly at cap', (() => { const r = sanitizeResumeRequest('FileId_123', Array.from({ length: 512 }, (_, i) => i), 1000); return !!r && r.missing.length === 512; })());
+check('volume message whitelist accepts well-formed', isValidFileVolumeMessage({ fileId: 'FileId_123', volumeIndex: 3, volumeData: 'aGVsbG8=' }));
+check('volume message whitelist rejects junk', !isValidFileVolumeMessage({ fileId: 'x', volumeIndex: -1, volumeData: '' }) && !isValidFileVolumeMessage(null) && !isValidFileVolumeMessage({ fileId: 'FileId_123', volumeIndex: 1.5, volumeData: 'aa' }));
+
+console.log('=== test-protocol: v1.2.0 voice helpers ===');
+check('duration formats m:ss', formatVoiceDuration(0) === '0:00' && formatVoiceDuration(65000) === '1:05' && formatVoiceDuration(595000) === '9:55');
+check('negative/NaN clamps to 0:00', formatVoiceDuration(-5) === '0:00' && formatVoiceDuration(NaN) === '0:00');
+check('voice type detection', isVoiceMsgType('voice') && isVoiceMsgType('voice_private') && !isVoiceMsgType('text'));
+check('voice payload accepts audio dataURL', !!sanitizeVoicePayload({ audio: 'data:audio/webm;base64,SGVsbG8=', dur: 7 }));
+check('voice payload rejects non-audio scheme', sanitizeVoicePayload({ audio: 'data:text/html;base64,PGI+', dur: 7 }) === null);
+check('voice payload rejects javascript: scheme', sanitizeVoicePayload({ audio: 'javascript:alert(1)', dur: 7 }) === null);
+check('voice payload rejects oversized', sanitizeVoicePayload({ audio: 'data:audio/webm;base64,' + 'A'.repeat(3 * 1024 * 1024), dur: 7 }) === null);
+check('voice payload clamps bad duration', sanitizeVoicePayload({ audio: 'data:audio/webm;base64,SGVsbG8=', dur: 'x' }).dur === 0 && sanitizeVoicePayload({ audio: 'data:audio/webm;base64,SGVsbG8=', dur: 9999 }).dur === 120);
+check('voice payload rejects non-object', sanitizeVoicePayload('x') === null && sanitizeVoicePayload(null) === null);
+
+console.log('=== test-protocol: v1.2.0 send queue ===');
+check('failed items re-queue in front preserving order', JSON.stringify(mergeFlushResults(['q1', 'q2'], ['f1', 'f2'])) === JSON.stringify(['f1', 'f2', 'q1', 'q2']));
+check('empty failures leave queue untouched', JSON.stringify(mergeFlushResults(['q1'], [])) === JSON.stringify(['q1']));
 
 console.log(`\ntest-protocol: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

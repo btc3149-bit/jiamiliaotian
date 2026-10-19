@@ -3,6 +3,18 @@
 import { deflate, inflate } from 'fflate';
 import { showFileUploadModal } from './util.fileUpload.js';
 import { imageFileToCleanFile } from './util.image.js';
+import { t } from './util.i18n.js';
+// v1.2.0 #17: resume-request validation
+import { sanitizeResumeRequest } from './util.validate.js';
+
+// v1.2.0 #17: sender keeps volume data in memory for a retention window so a
+// receiver can request re-sends of lost volumes. Cap: 16MB of base64 payload —
+// bigger transfers opt out of resume (honest limit, memory only, never
+// persisted).
+// v1.2.0 #17：发送端在保留窗口内把分卷留在内存，接收端可请求补发丢失分卷。
+// 上限 16MB base64 载荷——超限传输放弃续传（诚实上限，仅内存，不落盘）。
+const RESUME_RETENTION_MS = 5 * 60 * 1000;
+const RESUME_PAYLOAD_CAP = 16 * 1024 * 1024;
 
 // v1.1.0 #10: "send original image" opt-out from settings (default off = auto
 // compress + EXIF strip). Read directly to avoid a circular import with
@@ -429,17 +441,19 @@ async function handleFilesUpload(files, onSend) {
 			
 			updateProgress();
 			
-			// Create file transfer state
-			const fileTransfer = {
-				fileId,
-				fileName: file.name,
-				originalSize,
-				compressedSize,
-				totalVolumes: volumes.length,
-				sentVolumes: 0,
-				status: 'sending',
-				originalHash
-			};
+		// Create file transfer state
+		const fileTransfer = {
+			fileId,
+			fileName: file.name,
+			originalSize,
+			compressedSize,
+			totalVolumes: volumes.length,
+			sentVolumes: 0,
+			status: 'sending',
+			originalHash,
+			roomIdx: typeof window.activeRoomIndex === 'number' ? window.activeRoomIndex : null,
+			isPrivate: false
+		};
 			
 			window.fileTransfers.set(fileId, fileTransfer);
 			
@@ -514,6 +528,14 @@ async function handleFilesUpload(files, onSend) {
 async function sendVolumes(fileId, volumes, onSend, updateProgress, fileName) {
 	const fileTransfer = window.fileTransfers.get(fileId);
 	if (!fileTransfer) return;
+
+	// v1.2.0 #17: retain volumes for resume (size-capped, time-limited).
+	// v1.2.0 #17：保留分卷以支持续传（限大小、限时长）。
+	const payloadChars = volumes.reduce((s, v) => s + (v ? v.length : 0), 0);
+	if (payloadChars <= RESUME_PAYLOAD_CAP) {
+		fileTransfer.volumesRef = volumes;
+		setTimeout(() => { if (fileTransfer.volumesRef === volumes) fileTransfer.volumesRef = null; }, RESUME_RETENTION_MS)
+	}
 	
 	let currentVolume = 0;
 	const batchSize = 5; // 每批发送5个分卷
@@ -590,14 +612,16 @@ function updateFileProgress(fileId) {
 				downloadBtn.classList.remove('show', 'animate-in');
 				downloadBtn.style.display = 'none';
 			}
-		} else if (transfer.status === 'receiving') {
+		} else if (transfer.status === 'receiving' || transfer.status === 'incomplete') {
 			const progress = (transfer.receivedVolumes.size / transfer.totalVolumes) * 100;
 			if (progressContainer) {
 				progressContainer.style.display = 'block';
 				progressContainer.classList.remove('fade-out');
 			}
 			if (progressBar) progressBar.style.width = `${progress}%`;
-			if (statusText) statusText.textContent = `Receiving ${transfer.receivedVolumes.size}/${transfer.totalVolumes}`;
+			if (statusText) statusText.textContent = transfer.status === 'incomplete'
+				? t('file.waiting_resume', 'Waiting for re-send…')
+				: `Receiving ${transfer.receivedVolumes.size}/${transfer.totalVolumes}`;
 			if (downloadBtn) {
 				downloadBtn.classList.remove('show', 'animate-in');
 				downloadBtn.style.display = 'none';
@@ -641,12 +665,12 @@ function updateFileProgress(fileId) {
 
 // Handle incoming file messages
 // 处理接收到的文件消息
-export function handleFileMessage(message, isPrivate = false) {
+export function handleFileMessage(message, isPrivate = false, roomIdx = null) {
 	const { type, fileId, userName } = message;
-	
+
 	switch (type) {
 		case 'file_start':
-			handleFileStart(message, isPrivate);
+			handleFileStart(message, isPrivate, roomIdx);
 			break;
 		case 'file_volume':
 			handleFileVolume(message);
@@ -654,14 +678,68 @@ export function handleFileMessage(message, isPrivate = false) {
 		case 'file_complete':
 			handleFileComplete(message);
 			break;
+		// v1.2.0 #17: peer asks us to re-send lost volumes (public transfers only)
+		case 'file_resume_req':
+			handleFileResumeReq(message);
+			break;
 	}
+}
+
+// v1.2.0 #17: route a control/volume message for a transfer through the room
+// it belongs to. Public transfers only — private routing needs a live target
+// clientId which cannot survive a reconnect (honest scope limit).
+// v1.2.0 #17：把控制/分卷消息经该传输所属房间发出。仅限公共传输——私聊路由
+// 依赖会话级 clientId，重连后必然失效（诚实边界）。
+function routeFileMessage(transfer, msg) {
+	if (!transfer || transfer.isPrivate) return false;
+	const rd = window.roomsData && typeof transfer.roomIdx === 'number' ? window.roomsData[transfer.roomIdx] : null;
+	if (!rd || !rd.chat || typeof rd.chat.sendChannelMessage !== 'function') return false;
+	try {
+		return !!rd.chat.sendChannelMessage(msg.type, msg)
+	} catch (_e) {
+		return false
+	}
+}
+
+// v1.2.0 #17: sender side — re-send the missing volumes, then file_complete.
+// v1.2.0 #17：发送端——补发丢失分卷，再补一个 file_complete。
+function handleFileResumeReq(message) {
+	const req = sanitizeResumeRequest(message && message.fileId, message && message.missing, message && message.totalVolumes);
+	if (!req) return;
+	const transfer = window.fileTransfers.get(req.fileId);
+	if (!transfer || transfer.isPrivate || !Array.isArray(transfer.volumesRef)) return;
+	if (transfer.status !== 'completed' && transfer.status !== 'sending') return;
+	const volumes = transfer.volumesRef;
+	const missing = req.missing.filter((i) => i >= 0 && i < volumes.length);
+	if (missing.length === 0) return;
+	let cursor = 0;
+	const batch = 5;
+	(function sendNext() {
+		const end = Math.min(cursor + batch, missing.length);
+		for (let k = cursor; k < end; k++) {
+			const i = missing[k];
+			routeFileMessage(transfer, {
+				type: 'file_volume',
+				fileId: transfer.fileId,
+				volumeIndex: i,
+				volumeData: volumes[i],
+				isLast: i === volumes.length - 1
+			})
+		}
+		cursor = end;
+		if (cursor < missing.length) {
+			setTimeout(sendNext, 100)
+		} else {
+			routeFileMessage(transfer, { type: 'file_complete', fileId: transfer.fileId })
+		}
+	})()
 }
 
 // Handle file start message
 // 处理文件开始消息
-function handleFileStart(message, isPrivate) {
+function handleFileStart(message, isPrivate, roomIdx) {
 	const { fileId, fileName, originalSize, compressedSize, totalVolumes, originalHash, archiveHash, fileCount, fileManifest, isArchive, userName } = message;
-	
+
 	const fileTransfer = {
 		fileId,
 		fileName,
@@ -676,7 +754,9 @@ function handleFileStart(message, isPrivate) {
 		fileCount,
 		fileManifest,
 		isArchive,
-		userName // 记录发送者名字
+		userName, // 记录发送者名字
+		roomIdx: typeof roomIdx === 'number' ? roomIdx : (typeof window.activeRoomIndex === 'number' ? window.activeRoomIndex : null),
+		isPrivate: !!isPrivate
 	};
 	
 	window.fileTransfers.set(fileId, fileTransfer);
@@ -729,14 +809,39 @@ function handleFileVolume(message) {
 function handleFileComplete(message) {
 	const { fileId } = message;
 	const transfer = window.fileTransfers.get(fileId);
-	
 	if (!transfer) return;
-	
+
 	// 检查是否所有分卷都已接收
 	if (transfer.receivedVolumes.size === transfer.totalVolumes) {
 		transfer.status = 'completed';
 		updateFileProgress(fileId);
+		return
 	}
+
+	// v1.2.0 #17: incomplete on file_complete = some volumes were lost in
+	// transit. Public transfers ask the sender to re-send the gaps. Private
+	// transfers keep the old behaviour (honest scope limit — the target
+	// clientId does not survive a reconnect).
+	// v1.2.0 #17：file_complete 时仍有缺口 = 部分分卷在途中丢失。公共传输向
+	// 发送端请求补发；私聊保持旧行为（诚实边界——目标 clientId 重连即失效）。
+	transfer.status = 'incomplete';
+	updateFileProgress(fileId);
+	if (transfer.isPrivate) return;
+	const missing = [];
+	for (let i = 0; i < transfer.totalVolumes; i++) {
+		if (!transfer.receivedVolumes.has(i)) missing.push(i)
+	}
+	const req = sanitizeResumeRequest(fileId, missing, transfer.totalVolumes);
+	if (!req) return;
+	if (window.addSystemMsg) {
+		window.addSystemMsg(t('system.resume_requested', 'Missing {n} part(s) of "{name}" — requesting re-send.').replace('{n}', String(missing.length)).replace('{name}', transfer.fileName || ''), true)
+	}
+	routeFileMessage(transfer, {
+		type: 'file_resume_req',
+		fileId: req.fileId,
+		missing: req.missing,
+		totalVolumes: transfer.totalVolumes
+	})
 }
 
 // Download file from volumes

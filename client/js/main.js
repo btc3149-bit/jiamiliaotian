@@ -95,6 +95,12 @@ import { registerRoomListAccessor } from './util.push.js';
 // v1.1.0 #2: 恐慌清除（双确认）/ Panic wipe (double-confirmed)
 import { panicWipeWithConfirm } from './util.panic.js';
 
+// v1.2.0 #9: 语音消息（MediaRecorder → E2EE 内容层）/ Voice messages
+import { createVoiceRecorder } from './util.voice.js';
+
+// v1.2.0 #11: 离线发送队列 / Offline send queue
+import { isRoomConnected, enqueueSend } from './util.sendQueue.js';
+
 // 从 ui.js 中导入 UI 界面相关的功能
 // Import user interface functions from ui.js
 import {	renderUserList,       // 渲染用户列表 / Render user list
@@ -191,6 +197,57 @@ window.addEventListener('DOMContentLoaded', () => {
 	// v1.1.0 #1/#4: 本地搜索 + 多选（多选条由 setupSelectModeUI 挂载）
 	setupSearchUI();
 	setupSelectModeUI();
+	// v1.2.0 #9: 语音消息。单击开始/再击停止发送，Esc 取消，60s 上限自动停。
+	// 发送路径与图片一致：公共走 sendChannelMessage('voice')，私聊走加密信封。
+	const voiceBtn = document.querySelector('.chat-voice-btn');
+	if (voiceBtn) {
+		const voiceRecorder = createVoiceRecorder({
+			onState: (s) => {
+				voiceBtn.classList.toggle('recording', s === 'recording');
+				voiceBtn.textContent = s === 'recording' ? '⏹' : '🎤';
+			},
+			onVoice: (dur, audio) => {
+				const rd = roomsData[activeRoomIndex];
+				if (!rd || !rd.chat) return;
+				const payload = { audio, dur };
+				if (rd.privateChatTargetId) {
+					const targetClient = rd.chat.channel[rd.privateChatTargetId];
+					if (targetClient && targetClient.shared) {
+						const clientMessagePayload = {
+							a: 'm',
+							t: 'voice_private',
+							d: payload,
+							id: rd.chat.genMessageId()
+						};
+						const encryptedClientMessage = rd.chat.encryptClientMessage(clientMessagePayload, targetClient.shared);
+						const serverRelayPayload = {
+							a: 'c',
+							p: encryptedClientMessage,
+							c: rd.privateChatTargetId
+						};
+						const encryptedMessageForServer = rd.chat.encryptServerMessage(serverRelayPayload, rd.chat.serverShared);
+						rd.chat.sendMessage(encryptedMessageForServer);
+						addMsg(payload, false, 'voice_private', null, { id: clientMessagePayload.id });
+					} else {
+						addSystemMsg(`${t('system.private_message_failed', 'Cannot send private message to')} ${rd.privateChatTargetName}. ${t('system.user_not_connected', 'User might not be fully connected.')}`)
+					}
+				} else {
+					const mid = rd.chat.sendChannelMessage('voice', payload);
+					addMsg(payload, false, 'voice', null, { id: typeof mid === 'string' ? mid : null });
+				}
+			},
+			onError: (kind) => {
+				addSystemMsg(t('system.voice_failed', 'Voice recording unavailable ({reason}).').replace('{reason}', kind), true)
+			}
+		});
+		voiceBtn.addEventListener('click', () => voiceRecorder.toggle());
+		document.addEventListener('keydown', (e) => {
+			if (e.key === 'Escape' && voiceRecorder.state === 'recording') {
+				e.stopPropagation();
+				voiceRecorder.cancel()
+			}
+		});
+	}
 	setupMoreBtnMenu();
 	// P1-C: give util.push.js read access to the live room list (injected to
 	// avoid a circular module import with room.js)
@@ -303,6 +360,38 @@ window.addEventListener('DOMContentLoaded', () => {
 		return ids;
 	}
 
+	// v1.2.0 #11: public-channel send extracted so the offline queue can
+	// replay the exact same action after reconnect. Mentions are parsed at
+	// execution time (userMap may have changed while offline).
+	// v1.2.0 #11：公共频道发送逻辑抽出来，离线队列重连后原样重放。@提及在
+	// 执行时解析（离线期间 userMap 可能已变）。
+	function executePublicSend(rd, sendText, sendImages, replyCap, sendTtl) {
+		if (!rd || !rd.chat) return;
+		const replyAllowed = !!(replyCap && replyCap.scope !== 'private');
+		if (sendImages.length > 0) {
+			const messageContent = { text: sendText || '', images: sendImages };
+			const imgMid = rd.chat.sendChannelMessage('image', messageContent);
+			addMsg(messageContent, false, 'image', null, { id: typeof imgMid === 'string' ? imgMid : null });
+			return
+		}
+		if (!sendText) return;
+		const mentionIds = parseMentions(sendText, rd);
+		const extras = {};
+		if (mentionIds.length) extras.m = mentionIds;
+		if (replyAllowed) {
+			extras.rt = replyCap.id;
+			extras.q = { u: replyCap.name, x: replyCap.snippet };
+		}
+		if (sendTtl) extras.ttl = sendTtl;
+		const mid = rd.chat.sendChannelMessage('text', sendText, Object.keys(extras).length ? extras : undefined);
+		addMsg(sendText, false, 'text', null, {
+			id: typeof mid === 'string' ? mid : null,
+			mentions: mentionIds,
+			quote: replyAllowed ? { u: replyCap.name, x: replyCap.snippet } : null,
+			ttl: sendTtl || null
+		});
+	}
+
 	function sendMessage() {
 		const text = input.innerText.trim(); // 获取输入的文本 / Get input text
 		const images = imagePasteHandler ? imagePasteHandler.getCurrentImages() : []; // 获取所有图片
@@ -338,6 +427,26 @@ window.addEventListener('DOMContentLoaded', () => {
 			const reply = getPendingReply();
 			const ttl = getBurnTtl();
 			const replyAllowed = !!(reply && ((reply.scope === 'private') === (rd.privateChatTargetId != null)));
+			// v1.2.0 #11: offline + public target → queue instead of dropping.
+			// Memory-only queue (see util.sendQueue.js header); private sends
+			// and edits keep their existing paths (clientId/mid cannot survive
+			// a reconnect — honest scope limit).
+			// v1.2.0 #11：离线且发公共频道 → 入队而不是丢弃。仅内存队列（见
+			// util.sendQueue.js 头注释）；私聊与编辑保持原路径（clientId/mid
+			// 重连即失效——诚实边界）。
+			if (!rd.privateChatTargetId && !isRoomConnected(rd)) {
+				const replyCap = reply ? { id: reply.id, name: reply.name, snippet: reply.snippet, scope: reply.scope } : null;
+				enqueueSend(rd, () => executePublicSend(rd, text, images, replyCap, ttl));
+				addSystemMsg(t('system.queued_offline', 'Offline — message queued and will be sent after reconnect.'), true);
+				if (rd.chat.credentials) clearDraft(rd.chat.credentials.channel);
+				input.innerHTML = '';
+				if (imagePasteHandler && typeof imagePasteHandler.refreshPlaceholder === 'function') {
+					imagePasteHandler.refreshPlaceholder();
+				}
+				autoGrowInput();
+				if (reply) clearPendingReply();
+				return;
+			}
 			if (images.length > 0) {
 				// 发送包含图片的消息 (支持多图和文字合并)
 				// Send message with images (supports multiple images and text combined)
@@ -369,12 +478,10 @@ window.addEventListener('DOMContentLoaded', () => {
 						addSystemMsg(`${t('system.private_message_failed', 'Cannot send private message to')} ${rd.privateChatTargetName}. ${t('system.user_not_connected', 'User might not be fully connected.')}`)
 					}
 				} else {
-					// 公共频道图片消息发送
-					// Send image message to public channel
-					const imgMid = rd.chat.sendChannelMessage('image', messageContent);
-					addMsg(messageContent, false, 'image', null, { id: typeof imgMid === 'string' ? imgMid : null });
+					// 公共频道图片消息发送（v1.2.0 #11: 逻辑已抽出共用）
+					executePublicSend(rd, text, images, reply, ttl);
 				}
-				
+
 				imagePasteHandler.clearImages(); // 清除所有图片预览
 			} else if (text) {
 				// 发送纯文本消息
@@ -412,22 +519,8 @@ window.addEventListener('DOMContentLoaded', () => {
 					}
 				} else {
 					// 公共频道消息发送（携带 @提及，走 E2EE 内容层）
-					// Send public message (with @mentions, inside E2EE content layer)
-					const mentionIds = parseMentions(text, rd);
-					const extras = {};
-					if (mentionIds.length) extras.m = mentionIds;
-					if (replyAllowed) {
-						extras.rt = reply.id;
-						extras.q = { u: reply.name, x: reply.snippet };
-					}
-					if (ttl) extras.ttl = ttl;
-					const mid = rd.chat.sendChannelMessage('text', text, Object.keys(extras).length ? extras : undefined);
-					addMsg(text, false, 'text', null, {
-						id: typeof mid === 'string' ? mid : null,
-						mentions: mentionIds,
-						quote: replyAllowed ? { u: reply.name, x: reply.snippet } : null,
-						ttl: ttl || null
-					});
+					// v1.2.0 #11: 逻辑已抽出共用
+					executePublicSend(rd, text, images, reply, ttl);
 				}
 				if (reply) clearPendingReply();
 			}

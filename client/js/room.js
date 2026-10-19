@@ -24,6 +24,8 @@ import {
 } from './chat.js';
 import { reportPushSubscription } from './util.push.js';
 import { selectReplayable, dedupeReplayBatch } from './util.validate.js';
+// v1.2.0 #11: offline send queue flush
+import { flushSendQueue } from './util.sendQueue.js';
 import {
 	renderMainHeader,
 	renderUserList
@@ -238,14 +240,18 @@ export function joinRoom(userName, roomName, password, modal = null, onResult) {
 				if (loginContainer) loginContainer.style.display = 'none';
 				const chatContainer = $id('chat-container');
 				if (chatContainer) chatContainer.style.display = '';
-				
+
 
 			}
 			if (onResult && !closed) {
 				closed = true;
 				onResult(true)
 			}
-			addSystemMsg(t('system.secured', 'connection secured'))
+			addSystemMsg(t('system.secured', 'connection secured'));
+			// v1.2.0 #11: connection + server-shared key are ready — flush any
+			// messages queued while offline.
+			// v1.2.0 #11：连接与 server-shared 密钥就绪——冲刷离线期间排队的消息。
+			flushSendQueue(roomsData[idx])
 		},
 		onClientSecured: (user) => handleClientSecured(idx, user),
 		onClientList: (list, selfId) => handleClientList(idx, list, selfId),
@@ -328,6 +334,11 @@ export function handleClientList(idx, list, selfId) {
 			} catch (_e) { /* sync is best-effort */ }
 		}
 	}
+	// v1.2.0 #11: second flush point — by now E2EE to peers is negotiated, so
+	// queued messages can go out even if onServerSecured fired too early.
+	// v1.2.0 #11：第二个冲刷点——此刻端到端已协商完成，弥补 onServerSecured
+	// 过早触发的时序。
+	flushSendQueue(rd)
 }
 
 // Handle client secured event
@@ -540,6 +551,16 @@ export function handleClientMessage(idx, msg) {
 
 	// Handle file messages
 	if (msgType.startsWith('file_')) {
+		// v1.2.0 #17: resume requests must reach the sender regardless of which
+		// room is on screen (they carry no content — only fileId + indices).
+		// v1.2.0 #17：续传请求必须送达发送端，与当前激活房间无关（载荷只有
+		// fileId + 分卷下标，无内容）。
+		if (msgType === 'file_resume_req') {
+			if (window.handleFileMessage) {
+				window.handleFileMessage(msg.data, false, idx)
+			}
+			return;
+		}
 		// Part 1: Update message history and send notifications (for 'file_start' type)
 		if (msgType === 'file_start' || msgType === 'file_start_private') {
 			let realUserName = msg.userName;
@@ -577,7 +598,7 @@ export function handleClientMessage(idx, msg) {
 			// If it's the active room, delegate to util.file.js to handle UI and file transfer state.
 			// This applies to all file-related messages (file_start, file_volume, file_end, etc.)
 			if (window.handleFileMessage) {
-				window.handleFileMessage(msg.data, msgType.includes('_private'));
+				window.handleFileMessage(msg.data, msgType.includes('_private'), idx);
 			}
 		} else {
 			// If it's not the active room, only increment unread count for 'file_start' messages.

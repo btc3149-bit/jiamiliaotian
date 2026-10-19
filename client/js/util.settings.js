@@ -740,6 +740,14 @@ function showDesktopNotification(roomName, text, msgType, sender) {
 		if (msgType === 'private image') {
 			body = `${t('notification.private', '(Private)')}${body}`
 		}
+	} else if (msgType === 'voice' || msgType === 'private voice') {
+		// v1.2.0 #9: voice — never leak duration metadata granularity beyond a
+		// generic marker; keep the notification content-free like images.
+		// v1.2.0 #9：语音通知只给通用标记，不带任何内容。
+		body = `${senderPrefix}${t('notification.voice', '[voice]')}`;
+		if (msgType === 'private voice') {
+			body = `${t('notification.private', '(Private)')}${body}`
+		}
 	} else if (msgType === 'text' || msgType === 'private text') {
 		body = `${senderPrefix}${truncateText(text)}`;
 		if (msgType === 'private text') {
