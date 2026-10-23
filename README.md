@@ -171,6 +171,16 @@ sequenceDiagram
 
 *"在数字时代，加密是保护隐私的最后一道防线"*
 
+## 📄 License / 许可证
+
+本项目源码以 **[GNU AGPL-3.0](./LICENSE)** 授权 —— 授权边界与保留权利详见 [NOTICE.md](./NOTICE.md)。
+
+- ✅ 可以：自部署、学习审计、修改再分发（须以相同许可证开源）、搭建网络服务（须向你的用户开放修改后的源码 — AGPL 第 13 条）
+- ❌ 不可以：闭源 fork、换牌闭源商用、暗示官方背书
+- ™️ 「加米辽田 / jiamiliaotian」品牌、Logo 与界面文案**不在**代码授权范围内，fork 须换牌
+
+安全漏洞请勿公开 issue，走 [SECURITY.md](./SECURITY.md) 的私下渠道。
+
 ---
 
 > 致谢：本项目基于 [NodeCrypt](https://github.com/shuaiplus/NodeCrypt)（ISC License）架构与代码发展而来。

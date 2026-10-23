@@ -4,6 +4,7 @@ version = "1.3.0"
 description = "True end-to-end encrypted chat, desktop & mobile shell"
 authors = ["jiamiliaotian"]
 edition = "2021"
+license = "AGPL-3.0-only"
 
 # Tauri 2 mobile (Android/iOS) builds the crate as a library (`--lib`);
 # desktop keeps using the bin. lib+bin split is required for both.
