@@ -107,6 +107,9 @@ import { initAppLock } from './util.applock.js';
 // v1.4.0 #14: 凭据迁移落地（#jmlt= fragment）/ credential migration landing
 import { decryptMigration, parseMigrationText } from './util.keyExport.js';
 
+// v1.5.0 #16: WebRTC 1v1 音视频通话 / WebRTC 1v1 audio/video calls
+import { createCallManager } from './util.call.js';
+
 // v1.3.0 #6/#7: 设置面板渲染钩子 / render hooks for the settings panel
 import { renderRooms } from './room.js';
 import { renderChatArea } from './chat.js';
@@ -201,6 +204,18 @@ window.__jmltOpenLoginPrefill = (data) => {
 		openLoginModal();
 		fillLoginFormFields('-modal', data);
 	}
+};
+
+// ==================== v1.5.0 #16: WebRTC call manager ====================
+// 通话管理器装在 main.js（信令回调经 room.js 的 window 钩子转发进来）。
+let callManager = null;
+window.__jmltOnCallSignal = (r) => { if (callManager) callManager.handleSignal(r) };
+window.__jmltOnCallPeerLeft = (clientId) => { if (callManager) callManager.handlePeerLeft(clientId) };
+window.__jmltUpdateCallBtn = () => {
+	const btn = document.querySelector('.chat-call-btn');
+	if (!btn) return;
+	const rd = roomsData[activeRoomIndex];
+	btn.style.display = (rd && rd.privateChatTargetId) ? '' : 'none';
 };
 
 // 当 DOM 内容加载完成后执行初始化逻辑
@@ -319,6 +334,18 @@ window.addEventListener('DOMContentLoaded', () => {
 				voiceRecorder.cancel()
 			}
 		});
+	}
+	// v1.5.0 #16: call manager + composer 📞 button (visible only with a
+	// private-chat target; the button itself does the settings gate check).
+	// v1.5.0 #16：通话管理器 + 输入区 📞 按钮（仅私聊对象时可见；
+	// 设置开关的校验在 startOutgoing 内做）。
+	callManager = createCallManager({
+		getRoom: () => roomsData[activeRoomIndex],
+		addSystem: (text, warn) => addSystemMsg(text, warn)
+	});
+	const callBtn = document.querySelector('.chat-call-btn');
+	if (callBtn) {
+		callBtn.addEventListener('click', () => callManager.startOutgoing());
 	}
 	setupMoreBtnMenu();
 	// P1-C: give util.push.js read access to the live room list (injected to

@@ -50,7 +50,8 @@ class NodeCrypt {
 			onClientReadReceipt: callbacks.onClientReadReceipt || null,
 			onClientSync: callbacks.onClientSync || null,
 			onClientReplay: callbacks.onClientReplay || null,
-			onClientStatus: callbacks.onClientStatus || null
+			onClientStatus: callbacks.onClientStatus || null,
+			onClientCall: callbacks.onClientCall || null
 		};
 		try {
 			this.clientEc = new elliptic('curve25519')
@@ -507,6 +508,25 @@ class NodeCrypt {
 						})
 					} catch (error) {
 						this.logEvent('onMessage-client-status-callback', error, 'error')
+					}
+				}
+				return
+			}
+			if (clientDecrypted.a === 'call' && clientDecrypted.d && typeof clientDecrypted.d === 'object') {
+				// v1.5.0 #16: WebRTC call signaling (offer/answer/candidate/hangup).
+				// Relayed 1:1 inside the E2EE envelope; the server never sees the
+				// payload shape. Receivers whitelist-validate in util.call.js.
+				// v1.5.0 #16：WebRTC 通话信令（offer/answer/candidate/hangup）。
+				// 在 E2EE 信封内一对一中继，服务器对载荷一无所知。接收端在
+				// util.call.js 里做白名单校验。
+				if (this.callbacks.onClientCall) {
+					try {
+						this.callbacks.onClientCall({
+							clientId: serverDecrypted.c,
+							d: clientDecrypted.d
+						})
+					} catch (error) {
+						this.logEvent('onMessage-client-call-callback', error, 'error')
 					}
 				}
 				return
@@ -997,6 +1017,40 @@ class NodeCrypt {
 			}
 		}
 		return (false)
+	}
+
+	// v1.5.0 #16: send one WebRTC call-signal frame to a single peer. Private
+	// relay path ('c'), content-layer action 'call', np:1 semantics via the
+	// private route (never wakes offline subscribers). Callers must pass a
+	// sanitizeCallSignal()-clean object; receivers re-validate.
+	// v1.5.0 #16：向单个对端发送一帧 WebRTC 通话信令。私聊中继路径（'c'），
+	// 内容层 action 'call'，私有路由天然不唤醒离线订阅者。调用方必须传
+	// sanitizeCallSignal() 消毒后的对象；接收端再验一遍。
+	sendCallSignal(targetClientId, data) {
+		if (!this.serverShared) return (false)
+		const targetClient = this.channel[targetClientId];
+		if (!targetClient || !targetClient.shared) return (false)
+		try {
+			const clientMessagePayload = {
+				a: 'call',
+				d: data
+			};
+			const encryptedClientMessage = this.encryptClientMessage(clientMessagePayload, targetClient.shared);
+			const serverRelayPayload = {
+				a: 'c',
+				p: encryptedClientMessage,
+				c: targetClientId
+			};
+			const encryptedMessageForServer = this.encryptServerMessage(serverRelayPayload, this.serverShared);
+			if (!this.isOpen() || encryptedMessageForServer.length === 0 || encryptedMessageForServer.length > (8 * 1024 * 1024)) {
+				return (false)
+			}
+			this.connection.send(encryptedMessageForServer)
+		} catch (error) {
+			this.logEvent('sendCallSignal', error, 'error');
+			return (false)
+		}
+		return (true)
 	}
 
 	// Broadcast a replay sync request (P2). After a reconnect, the client

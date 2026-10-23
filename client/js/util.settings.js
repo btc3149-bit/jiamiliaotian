@@ -59,7 +59,9 @@ const DEFAULT_SETTINGS = {
 	localHistory: false, // 本地加密消息历史（可选，默认关闭）
 	sendOriginal: false, // v1.1.0 #10：发送原图（默认关 = 自动压缩 + 剥 EXIF）
 	appLock: false, // v1.4.0 #3：应用锁（默认关；凭据 id 存独立键 jmlt_applock_cred）
-	presence: '' // v1.4.0 #12：在线状态声明（'' = 不共享，默认关）
+	presence: '', // v1.4.0 #12：在线状态声明（'' = 不共享，默认关）
+	p2pCalls: false, // v1.5.0 #16：P2P 通话（默认关——对方可见 IP，须显式开启）
+	stunServers: '' // v1.5.0 #16：自填 STUN（默认空 = 仅局域网/同网）
 	// 注意：我们不设置默认语言，让系统自动检测浏览器语言
 	// Note: We don't set a default language, let the system auto-detect browser language
 };
@@ -91,7 +93,9 @@ function saveSettings(settings) {
 		localHistory,
 		sendOriginal,
 		appLock,
-		presence
+		presence,
+		p2pCalls,
+		stunServers
 	} = settings;
 	localStorage.setItem('settings', JSON.stringify({
 		notify,
@@ -102,7 +106,9 @@ function saveSettings(settings) {
 		localHistory,
 		sendOriginal,
 		appLock,
-		presence
+		presence,
+		p2pCalls,
+		stunServers
 	}))
 }
 
@@ -280,6 +286,25 @@ function setupSettingsPanel() {
 						<option value="away" ${settings.presence === 'away' ? 'selected' : ''}>${t('presence.away', '🌙 Away')}</option>
 						<option value="busy" ${settings.presence === 'busy' ? 'selected' : ''}>${t('presence.busy', '⛔ Busy')}</option>
 					</select>
+				</div>
+			</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.p2p_calls', 'Allow P2P Calls (peer sees your IP)')}</div>
+					<div class="settings-item-desc">${t('settings.p2p_calls_desc', 'Enable 1-to-1 audio/video calls with your private-chat partner. Media is peer-to-peer (DTLS-SRTP enforced by the browser), which means the other party can see your IP address — that is the nature of direct connections. OFF by default; no call signal is ever sent or accepted while off. Signaling itself always stays inside the end-to-end encrypted channel.')}</div>
+				</div>
+				<label class="switch">
+					<input type="checkbox" id="settings-p2p-calls" ${settings.p2pCalls ? 'checked' : ''}>
+					<span class="slider"></span>
+				</label>
+			</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.stun_servers', 'STUN Servers (optional)')}</div>
+					<div class="settings-item-desc">${t('settings.stun_servers_desc', 'Only needed across different networks. Comma-separated stun:host[:port] entries, at most 4. Nothing is built in — you choose your own servers (they can see connection attempts, not content). Empty = LAN/same-network only.')}</div>
+				</div>
+				<div class="language-selector">
+					<input type="text" id="settings-stun" class="language-select" style="width:220px" placeholder="stun:stun.example.net:3478" value="${escapeHTMLServerUrl(settings.stunServers || '')}">
 				</div>
 			</div>
 			<div class="settings-item">
@@ -583,6 +608,17 @@ function setupSettingsPanel() {
 		// room.js listens and (re-)broadcasts to every joined room / resets flags.
 		// room.js 监听该事件并向所有已加入房间（重）广播/复位标记。
 		window.dispatchEvent(new CustomEvent('jmltPresenceChanged', { detail: { status: val } }))
+	});
+	// ==================== v1.5.0 #16: P2P calls + STUN ====================
+	const p2pCallsCheckbox = $('#settings-p2p-calls', settingsContent);
+	on(p2pCallsCheckbox, 'change', e => {
+		settings.p2pCalls = !!e.target.checked;
+		saveSettings(settings)
+	});
+	const stunInput = $('#settings-stun', settingsContent);
+	on(stunInput, 'change', () => {
+		settings.stunServers = (stunInput ? stunInput.value : '').trim();
+		saveSettings(settings)
 	});
 	// ==================== v1.4.0 #14: credential migration ====================
 	on($('#settings-export-creds', settingsContent), 'click', async () => {

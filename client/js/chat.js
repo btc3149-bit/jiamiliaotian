@@ -364,6 +364,13 @@ export function updateChatInputStyle() {
 	}
 	const html = inputMessageInput.innerHTML.replace(/<br\s*\/?>(\s*)?/gi, '').replace(/&nbsp;/g, '').replace(/\u200B/g, '').trim();
 	placeholder.style.opacity = (html === '') ? '1' : '0'
+	// v1.5.0 #16: the call button is visible only with a private-chat target.
+	// Hook is set by main.js (avoids a chat.js → call-manager import cycle).
+	// v1.5.0 #16：通话按钮仅在有私聊对象时可见。钩子由 main.js 设置
+	//（避免 chat.js → 通话管理器的导入环）。
+	if (window.__jmltUpdateCallBtn) {
+		try { window.__jmltUpdateCallBtn() } catch (_e) { /* best-effort */ }
+	}
 }
 
 // Setup image preview functionality

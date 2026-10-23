@@ -9,7 +9,10 @@ import {
 	selectReplayable,
 	filterValidMids,
 	sanitizeResumeRequest,
-	isValidFileVolumeMessage
+	isValidFileVolumeMessage,
+	sanitizePresenceStatus,
+	sanitizeCallSignal,
+	parseStunServers
 } from './client/js/util.validate.js';
 import {
 	formatVoiceDuration,
@@ -146,6 +149,41 @@ check('voice payload rejects non-object', sanitizeVoicePayload('x') === null && 
 console.log('=== test-protocol: v1.2.0 send queue ===');
 check('failed items re-queue in front preserving order', JSON.stringify(mergeFlushResults(['q1', 'q2'], ['f1', 'f2'])) === JSON.stringify(['f1', 'f2', 'q1', 'q2']));
 check('empty failures leave queue untouched', JSON.stringify(mergeFlushResults(['q1'], [])) === JSON.stringify(['q1']));
+
+console.log('=== test-protocol: v1.4.0 presence whitelist ===');
+check('accepts the three declared states', sanitizePresenceStatus('online') === 'online' && sanitizePresenceStatus('away') === 'away' && sanitizePresenceStatus('busy') === 'busy');
+check('rejects arbitrary strings', sanitizePresenceStatus('online ') === null && sanitizePresenceStatus('ONLINE') === null && sanitizePresenceStatus('idle') === null);
+check('rejects injection vectors', sanitizePresenceStatus('<script>') === null && sanitizePresenceStatus('online;alert(1)') === null);
+check('rejects non-strings', sanitizePresenceStatus(null) === null && sanitizePresenceStatus(undefined) === null && sanitizePresenceStatus(42) === null && sanitizePresenceStatus({}) === null && sanitizePresenceStatus(['online']) === null);
+
+console.log('=== test-protocol: v1.5.0 call signal sanitizer ===');
+const sdp = 'v=0\r\no=- 46117 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n';
+check('valid offer passes with sdp', sanitizeCallSignal({ t: 'offer', sdp }).sdp === sdp);
+check('valid answer passes', sanitizeCallSignal({ t: 'answer', sdp }).t === 'answer');
+check('valid candidate passes with mid', (() => { const c = sanitizeCallSignal({ t: 'candidate', candidate: 'candidate:1 1 UDP 2122260223 192.168.1.4 56789 typ host', mid: '0' }); return !!c && c.mid === '0' && c.candidate.startsWith('candidate:1'); })());
+check('hangup/decline need no payload', !!sanitizeCallSignal({ t: 'hangup' }) && !!sanitizeCallSignal({ t: 'decline' }));
+check('rejects unknown types', sanitizeCallSignal({ t: 'invite', sdp }) === null && sanitizeCallSignal({ t: 'OFFER', sdp }) === null && sanitizeCallSignal({ t: '' }) === null);
+check('rejects null/non-object', sanitizeCallSignal(null) === null && sanitizeCallSignal('offer') === null && sanitizeCallSignal(42) === null);
+check('rejects missing/empty sdp', sanitizeCallSignal({ t: 'offer' }) === null && sanitizeCallSignal({ t: 'offer', sdp: '' }) === null);
+check('rejects oversize sdp (32k cap)', sanitizeCallSignal({ t: 'offer', sdp: 'x'.repeat(32769) }) === null);
+check('accepts 32k sdp boundary', !!sanitizeCallSignal({ t: 'offer', sdp: 'x'.repeat(32768) }));
+check('rejects sdp with control chars', sanitizeCallSignal({ t: 'offer', sdp: 'v=0\r\n\x00evil' }) === null && sanitizeCallSignal({ t: 'offer', sdp: '\u0007bell' }) === null);
+check('accepts sdp with newlines (CRLF ok)', !!sanitizeCallSignal({ t: 'offer', sdp: 'a\r\nb\r\n' }));
+check('rejects empty/oversize candidate', sanitizeCallSignal({ t: 'candidate', candidate: '' }) === null && sanitizeCallSignal({ t: 'candidate', candidate: 'c'.repeat(2049) }) === null);
+check('oversize mid clamps to empty', sanitizeCallSignal({ t: 'candidate', candidate: 'x', mid: 'm'.repeat(200) }).mid === '');
+check('non-string candidate rejected', sanitizeCallSignal({ t: 'candidate', candidate: 42 }) === null);
+
+console.log('=== test-protocol: v1.5.0 stun server parser ===');
+check('parses single stun url', JSON.stringify(parseStunServers('stun:stun.example.net:3478')) === JSON.stringify(['stun:stun.example.net:3478']));
+check('parses host without port', JSON.stringify(parseStunServers('stun:stun.example.net')) === JSON.stringify(['stun:stun.example.net']));
+check('parses comma+space separated list', parseStunServers('stun:a.example:1, stun:b.example; stun:c.example').length === 2 && parseStunServers('stun:a.example:1, stun:b.example; stun:c.example')[0] === 'stun:a.example:1');
+check('normalizes leading zeros in port', parseStunServers('stun:h.example:0080')[0] === 'stun:h.example:80');
+check('rejects turn urls', parseStunServers('turn:turn.example.net:3478').length === 0);
+check('rejects bad host charset', parseStunServers('stun:bad_host!.example').length === 0 && parseStunServers('stun:http://evil.example').length === 0);
+check('rejects out-of-range ports', parseStunServers('stun:h.example:0').length === 0 && parseStunServers('stun:h.example:99999').length === 0);
+check('dedupes repeated entries', parseStunServers('stun:a.example:1 stun:a.example:1').length === 1);
+check('caps at 4 servers', parseStunServers('stun:a:1 stun:b:1 stun:c:1 stun:d:1 stun:e:1').length === 4);
+check('non-string / empty input', JSON.stringify(parseStunServers(null)) === '[]' && JSON.stringify(parseStunServers('')) === '[]' && JSON.stringify(parseStunServers(42)) === '[]');
 
 console.log(`\ntest-protocol: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

@@ -131,3 +131,50 @@ export function isValidFileVolumeMessage(msg) {
 export function sanitizePresenceStatus(s) {
 	return (s === 'online' || s === 'away' || s === 'busy') ? s : null
 }
+
+// v1.5.0 #16: WebRTC call-signal sanitizer ('call' action). The payload is
+// SDP/ICE relayed peer-to-peer inside the E2EE envelope; the server stays
+// blind. Types are whitelisted, SDP is size-capped and control-char-free,
+// ICE candidate strings are short. Returns a clean object or null.
+// v1.5.0 #16：WebRTC 通话信号消毒（'call' action）。载荷是 E2EE 信封内
+// 点对点中继的 SDP/ICE，服务器全盲。类型白名单、SDP 限长且无控制字符、
+// ICE 候选短串。合法返回干净对象，否则 null。
+export function sanitizeCallSignal(d) {
+	if (!d || typeof d !== 'object') return null;
+	const t = d.t;
+	if (t !== 'offer' && t !== 'answer' && t !== 'candidate' && t !== 'hangup' && t !== 'decline') return null;
+	const out = { t };
+	if (t === 'offer' || t === 'answer') {
+		if (typeof d.sdp !== 'string' || !d.sdp || d.sdp.length > 32768) return null;
+		// reject control characters except \r\n inside SDP text
+		// SDP 文本中除 \r\n 外的控制字符一律拒绝
+		if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(d.sdp)) return null;
+		out.sdp = d.sdp;
+	} else if (t === 'candidate') {
+		if (typeof d.candidate !== 'string' || !d.candidate || d.candidate.length > 2048) return null;
+		out.candidate = d.candidate;
+		out.mid = (typeof d.mid === 'string' && d.mid.length <= 128) ? d.mid : '';
+	}
+	return out;
+}
+
+// v1.5.0 #16: parse user-supplied STUN server list. Only stun: URLs with a
+// safe host charset and optional port; no turn: (needs credentials — out of
+// scope), no third-party defaults (RULES.md invariant 9: nothing built in).
+// v1.5.0 #16：解析用户自填的 STUN 服务器列表。只收 stun: URL（安全主机字符
+// 集 + 可选端口）；不收 turn:（需要凭据，不在范围内），不内置任何第三方
+// （RULES.md 不变量 9：不默认内置）。
+export function parseStunServers(input, cap = 4) {
+	if (typeof input !== 'string') return [];
+	const out = [];
+	for (const raw of input.split(/[\s,]+/)) {
+		if (!raw) continue;
+		const m = /^stun:([A-Za-z0-9.\-_]+)(?::(\d{1,5}))?$/.exec(raw);
+		if (!m) continue;
+		if (m[2] && (+m[2] < 1 || +m[2] > 65535)) continue;
+		const url = m[2] ? 'stun:' + m[1] + ':' + (+m[2]) : 'stun:' + m[1];
+		if (out.indexOf(url) === -1) out.push(url);
+		if (out.length >= cap) break;
+	}
+	return out;
+}

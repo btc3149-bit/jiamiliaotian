@@ -3000,3 +3000,133 @@ html[data-mode="dark"] .md-link {
 html[data-mode="dark"] .applock-overlay {
 	background: rgba(0, 0, 0, .9);
 }
+
+/* ==================== v1.5.0: WebRTC call overlay / incoming modal ==================== */
+.call-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 99990;
+	background: #0b0f16;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.call-panel {
+	position: relative;
+	width: 100%;
+	height: 100%;
+	max-width: 960px;
+	max-height: 720px;
+	background: #11161f;
+	border-radius: 14px;
+	overflow: hidden;
+}
+.call-remote-video {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	background: #0b0f16;
+}
+.call-local-video {
+	position: absolute;
+	right: 14px;
+	top: 14px;
+	width: 180px;
+	height: 120px;
+	object-fit: cover;
+	border-radius: 10px;
+	border: 1px solid rgba(255, 255, 255, .18);
+	background: #000;
+}
+.call-info {
+	position: absolute;
+	left: 16px;
+	top: 14px;
+	color: #fff;
+	text-shadow: 0 1px 3px rgba(0, 0, 0, .6);
+}
+.call-peer {
+	font-size: 17px;
+	font-weight: 700;
+}
+.call-status {
+	font-size: 13px;
+	opacity: .85;
+	margin-top: 2px;
+}
+.call-controls {
+	position: absolute;
+	bottom: 18px;
+	left: 0;
+	right: 0;
+	display: flex;
+	justify-content: center;
+	gap: 18px;
+}
+.call-ctl {
+	width: 52px;
+	height: 52px;
+	border-radius: 50%;
+	border: none;
+	font-size: 21px;
+	cursor: pointer;
+	background: rgba(255, 255, 255, .14);
+	color: #fff;
+	backdrop-filter: blur(6px);
+}
+.call-ctl:hover {
+	background: rgba(255, 255, 255, .24);
+}
+.call-ctl.call-end {
+	background: #e74c3c;
+}
+.call-ctl.call-end:hover {
+	background: #c0392b;
+}
+.call-incoming-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 99991;
+	background: rgba(10, 14, 20, .78);
+	backdrop-filter: blur(8px);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.call-incoming-card {
+	text-align: center;
+	color: #fff;
+	background: #161c27;
+	border-radius: 16px;
+	padding: 30px 40px;
+	min-width: 280px;
+}
+.call-incoming-icon {
+	font-size: 46px;
+	margin-bottom: 8px;
+	animation: call-ring-pulse 1.2s ease-in-out infinite;
+}
+@keyframes call-ring-pulse {
+	0%, 100% { transform: scale(1); }
+	50% { transform: scale(1.12); }
+}
+.call-incoming-card .call-status {
+	color: #9fb6d8;
+	margin: 6px 0 16px;
+}
+.call-incoming-actions {
+	display: flex;
+	justify-content: center;
+	gap: 16px;
+}
+.call-ctl.call-accept {
+	background: #27ae60;
+}
+.call-ctl.call-accept:hover {
+	background: #219a52;
+}
+
+/* dark mode */
+html[data-mode="dark"] .call-incoming-card {
+	background: #10151e;
+}

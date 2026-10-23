@@ -285,7 +285,8 @@ export function joinRoom(userName, roomName, password, modal = null, onResult) {
 		onClientReadReceipt: (r) => handleClientReadReceipt(idx, r),
 		onClientSync: (r) => handleClientSync(idx, r),
 		onClientReplay: (r) => handleClientReplay(idx, r),
-		onClientStatus: (r) => handleClientStatus(idx, r)
+		onClientStatus: (r) => handleClientStatus(idx, r),
+		onClientCall: (r) => { if (window.__jmltOnCallSignal) window.__jmltOnCallSignal(r) }
 	};
 	const chatInst = new window.NodeCrypt(window.config, callbacks);
 	roomsData[idx].chat = chatInst;
@@ -480,6 +481,11 @@ export function handleClientLeft(idx, clientId) {
 	// v1.4.0 #12: a departed member's declared status must not linger
 	// v1.4.0 #12：离开成员的状态声明不允许残留
 	if (rd.statusMap) delete rd.statusMap[clientId];
+	// v1.5.0 #16: if the departing member was on a call with us, end it.
+	// v1.5.0 #16：离开成员若是通话对端，立即结束通话。
+	if (window.__jmltOnCallPeerLeft) {
+		try { window.__jmltOnCallPeerLeft(clientId) } catch (_e) { /* best-effort */ }
+	}
 	clearTypingUser(idx, clientId); // P2: don't let a departed member's typing state linger
 	if (activeRoomIndex === idx) {
 		renderUserList(false);
