@@ -123,3 +123,11 @@ export function isValidFileVolumeMessage(msg) {
 		typeof msg.volumeData === 'string' && msg.volumeData.length > 0 &&
 		msg.volumeData.length <= 1024 * 1024)
 }
+
+// v1.4.0 #12: presence status whitelist ('st' action). The only three states
+// a member may declare; anything else is dropped at both send and receive.
+// v1.4.0 #12：在线状态白名单（'st' action）。成员只能声明这三种状态，
+// 发送端与接收端共用这一条边界，其余一律丢弃。
+export function sanitizePresenceStatus(s) {
+	return (s === 'online' || s === 'away' || s === 'busy') ? s : null
+}

@@ -2922,3 +2922,81 @@ html[data-mode="dark"] .md-codeblock {
 html[data-mode="dark"] .md-link {
 	color: #7aa7f0;
 }
+
+/* ==================== v1.4.0: app lock / presence badge / migration modal ==================== */
+.applock-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 99999;
+	background: rgba(12, 16, 24, .82);
+	backdrop-filter: blur(14px);
+	-webkit-backdrop-filter: blur(14px);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.applock-card {
+	text-align: center;
+	color: #fff;
+	max-width: 340px;
+	padding: 28px;
+}
+.applock-icon {
+	font-size: 54px;
+	margin-bottom: 10px;
+}
+.applock-title {
+	font-size: 22px;
+	font-weight: 700;
+	margin-bottom: 6px;
+}
+.applock-hint {
+	font-size: 13px;
+	opacity: .75;
+	margin-bottom: 18px;
+	line-height: 1.5;
+}
+.applock-unlock-btn {
+	background: #357ae8;
+	color: #fff;
+	border: none;
+	border-radius: 22px;
+	padding: 10px 34px;
+	font-size: 15px;
+	cursor: pointer;
+}
+.applock-unlock-btn:hover {
+	background: #2a63c4;
+}
+.applock-error {
+	color: #ff9a9a;
+	font-size: 13px;
+	margin-top: 12px;
+}
+.applock-emergency {
+	display: block;
+	margin: 16px auto 0;
+	background: none;
+	border: none;
+	color: #ff9a9a;
+	font-size: 12px;
+	text-decoration: underline;
+	cursor: pointer;
+	opacity: .85;
+}
+.member-status-badge {
+	font-size: .72em;
+	margin-left: 5px;
+	vertical-align: middle;
+}
+.migration-btn-row {
+	display: flex;
+	gap: 8px;
+	justify-content: center;
+	flex-wrap: wrap;
+}
+
+/* dark mode */
+html[data-mode="dark"] .applock-overlay {
+	background: rgba(0, 0, 0, .9);
+}

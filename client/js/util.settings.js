@@ -35,6 +35,10 @@ import {
 	decryptArchive,
 	mergeArchiveMessages
 } from './util.exportArchive.js';
+// v1.4.0 #3: app lock (WebAuthn local lock)
+import { enableAppLock, disableAppLock, lockNow, isAppLockSupported, isAppLockEnabled } from './util.applock.js';
+// v1.4.0 #14: room credential migration (QR + .jmltk file)
+import { encryptMigration, buildMigrationPayload, decryptMigration, showMigrationModal } from './util.keyExport.js';
 // v1.3.0 #6/#7 helpers for the current-room section
 function currentRoom() {
 	try {
@@ -53,7 +57,9 @@ const DEFAULT_SETTINGS = {
 	theme: 'theme1',
 	darkMode: 'auto', // 'auto' 跟随系统 | 'light' | 'dark'
 	localHistory: false, // 本地加密消息历史（可选，默认关闭）
-	sendOriginal: false // v1.1.0 #10：发送原图（默认关 = 自动压缩 + 剥 EXIF）
+	sendOriginal: false, // v1.1.0 #10：发送原图（默认关 = 自动压缩 + 剥 EXIF）
+	appLock: false, // v1.4.0 #3：应用锁（默认关；凭据 id 存独立键 jmlt_applock_cred）
+	presence: '' // v1.4.0 #12：在线状态声明（'' = 不共享，默认关）
 	// 注意：我们不设置默认语言，让系统自动检测浏览器语言
 	// Note: We don't set a default language, let the system auto-detect browser language
 };
@@ -83,7 +89,9 @@ function saveSettings(settings) {
 		language,
 		darkMode,
 		localHistory,
-		sendOriginal
+		sendOriginal,
+		appLock,
+		presence
 	} = settings;
 	localStorage.setItem('settings', JSON.stringify({
 		notify,
@@ -92,7 +100,9 @@ function saveSettings(settings) {
 		language,
 		darkMode,
 		localHistory,
-		sendOriginal
+		sendOriginal,
+		appLock,
+		presence
 	}))
 }
 
@@ -243,6 +253,37 @@ function setupSettingsPanel() {
 			</div>
 			<div class="settings-item">
 				<div class="settings-item-label">
+					<div>${t('settings.applock', 'App Lock (WebAuthn)')}</div>
+					<div class="settings-item-desc">${t('settings.applock_desc', 'Lock the screen with this device\'s platform authenticator (fingerprint / face / Windows Hello) after 5 minutes in the background, or lock manually below. The credential never leaves this device. Honest limits: this is an anti-shoulder-surfing guard — it does NOT resist a technical user (DevTools) or forensics.')}</div>
+				</div>
+				<label class="switch">
+					<input type="checkbox" id="settings-applock" ${isAppLockEnabled() ? 'checked' : ''} ${isAppLockSupported() ? '' : 'disabled'}>
+					<span class="slider"></span>
+				</label>
+			</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.applock_now', 'Lock Now')}</div>
+					<div class="settings-item-desc">${t('settings.applock_now_desc', 'Immediately lock the screen (requires App Lock to be enabled).')}</div>
+				</div>
+				<button type="button" id="settings-applock-lock" class="settings-danger-btn" style="background:#357ae8;color:#fff">${t('settings.applock_now_btn', 'Lock')}</button>
+			</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.presence', 'Share My Status')}</div>
+					<div class="settings-item-desc">${t('settings.presence_desc', 'Optionally broadcast a self-declared status (online / away / busy) to room members as an encrypted signal. OFF by default — when off, nothing is ever sent. Switching off stops future announcements; an already-shown status remains until you leave.')}</div>
+				</div>
+				<div class="language-selector">
+					<select id="settings-presence" class="language-select">
+						<option value="" ${!settings.presence ? 'selected' : ''}>${t('presence.off', 'Do not share (default)')}</option>
+						<option value="online" ${settings.presence === 'online' ? 'selected' : ''}>${t('presence.online', '🟢 Online')}</option>
+						<option value="away" ${settings.presence === 'away' ? 'selected' : ''}>${t('presence.away', '🌙 Away')}</option>
+						<option value="busy" ${settings.presence === 'busy' ? 'selected' : ''}>${t('presence.busy', '⛔ Busy')}</option>
+					</select>
+				</div>
+			</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
 					<div>${t('settings.panic_wipe', 'Panic Wipe')}</div>
 					<div class="settings-item-desc">${t('settings.panic_wipe_desc', 'Immediately erase EVERYTHING this app stored on this device: room key pins, settings, drafts, encrypted history and caches. Requires double confirmation and cannot be undone.')} ${t('settings.panic_wipe_hotkey', 'Shortcut: Ctrl+Shift+Backspace.')}</div>
 				</div>
@@ -293,6 +334,21 @@ function setupSettingsPanel() {
 				</div>
 				<button type="button" id="settings-import-archive" class="settings-danger-btn" style="background:#357ae8;color:#fff">${t('settings.import_archive_btn', 'Choose File…')}</button>
 				<input type="file" id="settings-import-archive-file" accept=".jmlt,application/octet-stream" style="display:none">
+			</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.export_creds', 'Export Room Credentials (Migration)')}</div>
+					<div class="settings-item-desc">${t('settings.export_creds_desc', 'Creates a QR code / file containing this room\'s name + password, encrypted with a one-time key you choose. Valid for 10 minutes. The server pin is NOT migrated — the new device re-establishes trust on first connect (by design, so trust is never copied).')}</div>
+				</div>
+				<button type="button" id="settings-export-creds" class="settings-danger-btn" style="background:#357ae8;color:#fff">${t('settings.export_creds_btn', 'Export…')}</button>
+			</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.import_creds', 'Import Room Credentials')}</div>
+					<div class="settings-item-desc">${t('settings.import_creds_desc', 'Open a .jmltk migration file (or scan the QR on the login screen). You need the one-time key that was used to create it. Files expire after 10 minutes.')}</div>
+				</div>
+				<button type="button" id="settings-import-creds" class="settings-danger-btn" style="background:#357ae8;color:#fff">${t('settings.import_creds_btn', 'Choose File…')}</button>
+				<input type="file" id="settings-import-creds-file" accept=".jmltk,application/octet-stream" style="display:none">
 			</div>
 		</div>
 				<div class="settings-section">
@@ -489,6 +545,86 @@ function setupSettingsPanel() {
 	const panicWipeBtn = $('#settings-panic-wipe', settingsContent);
 	on(panicWipeBtn, 'click', () => {
 		panicWipeWithConfirm();
+	});
+	// ==================== v1.4.0 #3: app lock ====================
+	const appLockCheckbox = $('#settings-applock', settingsContent);
+	on(appLockCheckbox, 'change', e => {
+		if (e.target.checked) {
+			if (!isAppLockSupported()) {
+				alert(t('settings.applock_unsupported', 'App Lock requires a platform authenticator (fingerprint / face / Windows Hello). Not available in this browser.'));
+				e.target.checked = false;
+				return
+			}
+			enableAppLock().then(() => {
+				settings.appLock = true;
+				saveSettings(settings);
+			}).catch(() => {
+				e.target.checked = false;
+				alert(t('settings.applock_failed', 'Could not register the app lock credential.'))
+			})
+		} else {
+			disableAppLock();
+			settings.appLock = false;
+			saveSettings(settings)
+		}
+	});
+	const appLockNowBtn = $('#settings-applock-lock', settingsContent);
+	on(appLockNowBtn, 'click', () => {
+		if (!lockNow()) {
+			alert(t('settings.applock_need_enable', 'Enable App Lock first.'))
+		}
+	});
+	// ==================== v1.4.0 #12: presence selector ====================
+	const presenceSelect = $('#settings-presence', settingsContent);
+	on(presenceSelect, 'change', e => {
+		const val = (e.target.value === 'online' || e.target.value === 'away' || e.target.value === 'busy') ? e.target.value : '';
+		settings.presence = val;
+		saveSettings(settings);
+		// room.js listens and (re-)broadcasts to every joined room / resets flags.
+		// room.js 监听该事件并向所有已加入房间（重）广播/复位标记。
+		window.dispatchEvent(new CustomEvent('jmltPresenceChanged', { detail: { status: val } }))
+	});
+	// ==================== v1.4.0 #14: credential migration ====================
+	on($('#settings-export-creds', settingsContent), 'click', async () => {
+		const rd = currentRoom();
+		if (!rd || !rd.roomName) {
+			alert(t('settings.export_no_room', 'Join a room first.'));
+			return
+		}
+		const key = window.prompt(t('settings.export_creds_key', 'Choose a one-time migration key (to encrypt the credentials):') || '');
+		if (!key) return;
+		try {
+			const payload = buildMigrationPayload(rd.roomName, rd.password || '', rd.myUserName || '', Date.now());
+			const bytes = await encryptMigration(payload, key);
+			showMigrationModal(bytes);
+			window.addSystemMsg && window.addSystemMsg(t('settings.export_creds_done', 'Credentials exported — scan the QR on the new device within 10 minutes.'), true)
+		} catch (err) {
+			window.addSystemMsg && window.addSystemMsg(t('settings.export_failed', 'Export failed: ') + (err && err.message || err), true)
+		}
+	});
+	const credsFileInput = $('#settings-import-creds-file', settingsContent);
+	on($('#settings-import-creds', settingsContent), 'click', () => {
+		if (credsFileInput) credsFileInput.click()
+	});
+	on(credsFileInput, 'change', async () => {
+		const file = credsFileInput && credsFileInput.files && credsFileInput.files[0];
+		if (credsFileInput) credsFileInput.value = '';
+		if (!file) return;
+		const key = window.prompt(t('settings.import_creds_key', 'Migration key (to decrypt the credentials):') || '');
+		if (!key) return;
+		try {
+			const bytes = new Uint8Array(await file.arrayBuffer());
+			const data = await decryptMigration(bytes, key);
+			if (typeof window.__jmltOpenLoginPrefill === 'function') {
+				window.__jmltOpenLoginPrefill(data)
+			}
+			window.addSystemMsg && window.addSystemMsg(t('settings.import_creds_done', 'Room credentials imported — review and press ENTER to join.'), true)
+		} catch (err) {
+			const expired = err && err.message === 'expired';
+			window.addSystemMsg && window.addSystemMsg(expired
+				? t('settings.import_creds_expired', 'Import failed — the migration expired (valid for 10 minutes). Export again.')
+				: t('settings.import_creds_failed', 'Import failed — wrong key or corrupted file.'), true)
+		}
 	});
 	// ==================== v1.3.0 #6: room management ====================
 	const roomAliasInput = $('#settings-room-alias', settingsContent);

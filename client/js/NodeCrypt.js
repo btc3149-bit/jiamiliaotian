@@ -49,7 +49,8 @@ class NodeCrypt {
 			onClientDelete: callbacks.onClientDelete || null,
 			onClientReadReceipt: callbacks.onClientReadReceipt || null,
 			onClientSync: callbacks.onClientSync || null,
-			onClientReplay: callbacks.onClientReplay || null
+			onClientReplay: callbacks.onClientReplay || null,
+			onClientStatus: callbacks.onClientStatus || null
 		};
 		try {
 			this.clientEc = new elliptic('curve25519')
@@ -487,6 +488,25 @@ class NodeCrypt {
 						} catch (error) {
 							this.logEvent('onMessage-client-rr-callback', error, 'error')
 						}
+					}
+				}
+				return
+			}
+			if (clientDecrypted.a === 'st' && this.isString(clientDecrypted.s)) {
+				// v1.4.0 #12: user-declared presence status (online/away/busy).
+				// Opt-in metadata — the sender chose to share one of three bits.
+				// Receivers whitelist-validate; receivers re-check in room.js.
+				// v1.4.0 #12：用户主动声明的在线状态（online/away/busy）。
+				// 自愿元数据——发送方选择共享这一个状态位；接收端再验白名单。
+				if (this.callbacks.onClientStatus) {
+					try {
+						this.callbacks.onClientStatus({
+							clientId: serverDecrypted.c,
+							username: this.channel[serverDecrypted.c].username,
+							s: clientDecrypted.s
+						})
+					} catch (error) {
+						this.logEvent('onMessage-client-status-callback', error, 'error')
 					}
 				}
 				return
@@ -932,6 +952,48 @@ class NodeCrypt {
 				return (true)
 			} catch (error) {
 				this.logEvent('sendReadReceipts', error, 'error')
+			}
+		}
+		return (false)
+	}
+
+	// v1.4.0 #12: broadcast the local user's self-declared presence status
+	// (online/away/busy) to all channel members. Content-layer action ('st')
+	// inside the E2EE 'w' envelope, np:1 — never wakes offline subscribers,
+	// exactly like typing/read-receipts. Callers pass an already-whitelisted
+	// value; receivers re-validate (defense in depth).
+	// v1.4.0 #12：向全频道广播本端用户自声明的在线状态。内容层 action（'st'）
+	// 走既有 E2EE 信封，np:1——绝不唤醒离线订阅者，与输入中/已读回执同规。
+	sendPresenceStatus(status) {
+		if (this.serverShared) {
+			try {
+				if (status !== 'online' && status !== 'away' && status !== 'busy') {
+					return (false)
+				}
+				let payloads = {};
+				for (const clientId in this.channel) {
+					if (this.channel[clientId].shared && this.channel[clientId].username) {
+						payloads[clientId] = this.encryptClientMessage({
+							a: 'st',
+							s: status
+						}, this.channel[clientId].shared);
+					}
+				}
+				if (Object.keys(payloads).length > 0) {
+					// R2 / 不变量 8: np:1 — presence must never wake offline subscribers.
+					const payload = this.encryptServerMessage({
+						a: 'w',
+						p: payloads,
+						np: 1
+					}, this.serverShared);
+					if (!this.isOpen() || payload.length === 0 || payload.length > (8 * 1024 * 1024)) {
+						return (false)
+					}
+					this.connection.send(payload)
+				}
+				return (true)
+			} catch (error) {
+				this.logEvent('sendPresenceStatus', error, 'error')
 			}
 		}
 		return (false)

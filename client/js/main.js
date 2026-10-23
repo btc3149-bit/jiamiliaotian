@@ -101,6 +101,12 @@ import { createVoiceRecorder } from './util.voice.js';
 // v1.2.0 #11: 离线发送队列 / Offline send queue
 import { isRoomConnected, enqueueSend } from './util.sendQueue.js';
 
+// v1.4.0 #3: 应用锁（WebAuthn 本地锁）/ App lock (WebAuthn local lock)
+import { initAppLock } from './util.applock.js';
+
+// v1.4.0 #14: 凭据迁移落地（#jmlt= fragment）/ credential migration landing
+import { decryptMigration, parseMigrationText } from './util.keyExport.js';
+
 // v1.3.0 #6/#7: 设置面板渲染钩子 / render hooks for the settings panel
 import { renderRooms } from './room.js';
 import { renderChatArea } from './chat.js';
@@ -170,6 +176,33 @@ window.__jmltAppendLocalHistory = (rd, entry) => {
 	try { appendLocalHistory(rd, entry) } catch (_e) { /* best-effort */ }
 };
 
+// v1.4.0 #14: prefill the login form with migrated credentials. Works both
+// on the login page (fill the main form) and inside a room (open the join
+// modal and fill it). Values are set directly — loginFormHandler reads .value.
+// v1.4.0 #14：用迁移来的凭据预填登录表单。登录页填主表单；已在房间内则
+// 打开加入弹窗并填充。直接赋值即可——loginFormHandler 读 .value。
+function fillLoginFormFields(prefix, data) {
+	const u = document.getElementById('userName' + prefix);
+	const n = document.getElementById('roomName' + prefix);
+	const p = document.getElementById('password' + prefix);
+	if (n) { n.value = data.roomName || ''; n.readOnly = false; }
+	if (p) { p.value = data.password || ''; p.readOnly = false; p.style.color = ''; p.style.background = ''; }
+	if (u && data.username) u.value = data.username;
+}
+window.__jmltOpenLoginPrefill = (data) => {
+	if (!data || !data.roomName) return;
+	const loginContainer = $id('login-container');
+	const onLoginPage = !!(loginContainer && loginContainer.style.display !== 'none');
+	if (onLoginPage) {
+		fillLoginFormFields('', data);
+	} else {
+		// inside a room — open the join modal and fill it there
+		// 已在房间内——打开加入弹窗填充
+		openLoginModal();
+		fillLoginFormFields('-modal', data);
+	}
+};
+
 // 当 DOM 内容加载完成后执行初始化逻辑
 // Run initialization logic when the DOM content is fully loaded
 window.addEventListener('DOMContentLoaded', () => {
@@ -206,6 +239,32 @@ window.addEventListener('DOMContentLoaded', () => {
 	// Initialize autofill, input placeholders, and menus
 	autofillRoomPwd();	setupInputPlaceholder();
 	setupReactionsUI();
+	// v1.4.0 #3: app lock — background auto-lock (5 min) + pagehide lock
+	initAppLock();
+	// v1.4.0 #14: credential migration landing — a scanned QR opens the app
+	// with #jmlt=<payload>. The fragment never reaches any server; prompt for
+	// the one-time key, decrypt (10-minute TTL enforced), prefill, strip hash.
+	// v1.4.0 #14：扫码落地——#jmlt=<载荷>。fragment 不经过任何服务器；
+	// 询问一次性密钥 → 解密（强制 10 分钟有效期）→ 预填 → 清除 hash。
+	if ((location.hash || '').indexOf('#jmlt=') === 0) {
+		const raw = location.hash.slice('#jmlt='.length);
+		try { history.replaceState(null, '', location.pathname); } catch (_e) { /* keep hash */ }
+		const bytes = parseMigrationText('#jmlt=' + raw);
+		if (bytes) {
+			const key = window.prompt(t('settings.import_creds_key', 'Migration key (to decrypt the credentials):') || '');
+			if (key) {
+				decryptMigration(bytes, key).then((data) => {
+					window.__jmltOpenLoginPrefill(data);
+					addSystemMsg(t('migration.prefilled', 'Room credentials imported from migration link — review and press ENTER to join.'), true)
+				}).catch((err) => {
+					const expired = err && err.message === 'expired';
+					addSystemMsg(expired
+						? t('settings.import_creds_expired', 'Import failed — the migration expired (valid for 10 minutes). Export again.')
+						: t('settings.import_creds_failed', 'Import failed — wrong key or corrupted file.'), true)
+				})
+			}
+		}
+	}
 	setupBurnBtn(); // P1-B: burn-timer toggle in composer
 	// v1.1.0 #1/#4: 本地搜索 + 多选（多选条由 setupSelectModeUI 挂载）
 	setupSearchUI();

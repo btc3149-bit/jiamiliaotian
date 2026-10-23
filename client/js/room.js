@@ -28,6 +28,8 @@ import { selectReplayable, dedupeReplayBatch } from './util.validate.js';
 import { flushSendQueue } from './util.sendQueue.js';
 // v1.3.0 #6: local-only room metadata (alias/group/pinned)
 import { roomHashOf, getRoomMeta, displayRoomName, sortRoomIndexes } from './util.roomMeta.js';
+// v1.4.0 #12: presence status whitelist ('st' action)
+import { sanitizePresenceStatus } from './util.validate.js';
 import {
 	renderMainHeader,
 	renderUserList
@@ -67,7 +69,8 @@ export function getNewRoomData() {
 		unreadCount: 0,
 		privateChatTargetId: null,
 		privateChatTargetName: null,
-		typingUsers: {} // clientId -> timestamp of last typing signal
+		typingUsers: {}, // clientId -> timestamp of last typing signal
+		statusMap: {} // v1.4.0 #12: clientId -> self-declared presence ('online'|'away'|'busy')
 	}
 }
 
@@ -281,7 +284,8 @@ export function joinRoom(userName, roomName, password, modal = null, onResult) {
 		onClientDelete: (r) => handleClientDelete(idx, r),
 		onClientReadReceipt: (r) => handleClientReadReceipt(idx, r),
 		onClientSync: (r) => handleClientSync(idx, r),
-		onClientReplay: (r) => handleClientReplay(idx, r)
+		onClientReplay: (r) => handleClientReplay(idx, r),
+		onClientStatus: (r) => handleClientStatus(idx, r)
 	};
 	const chatInst = new window.NodeCrypt(window.config, callbacks);
 	roomsData[idx].chat = chatInst;
@@ -357,7 +361,65 @@ export function handleClientList(idx, list, selfId) {
 	// v1.2.0 #11：第二个冲刷点——此刻端到端已协商完成，弥补 onServerSecured
 	// 过早触发的时序。
 	flushSendQueue(rd)
+	// v1.4.0 #12: re-announce our self-declared presence once per connection
+	// (new peers cannot know it). Sent only when the user opted in via the
+	// settings panel — default is off and nothing is ever broadcast.
+	// v1.4.0 #12：每条连接重新广播一次自己的在线状态声明（新同伴无从得知）。
+	// 仅在用户于设置面板显式开启后发送——默认关，什么都不广播。
+	const presence = readPresenceSetting();
+	if (presence && !rd._presenceSent && rd.chat && typeof rd.chat.sendPresenceStatus === 'function') {
+		rd._presenceSent = rd.chat.sendPresenceStatus(presence)
+	}
 }
+
+// v1.4.0 #12: read the user's chosen presence from local settings. Kept as a
+// tiny local reader (instead of importing util.settings) to avoid an import
+// cycle; the shape is a plain JSON blob written by the settings panel.
+// v1.4.0 #12：从本地设置读取用户选择的在线状态。就地小读取器（不 import
+// util.settings 以防环）；settings 就是设置面板写的普通 JSON。
+function readPresenceSetting() {
+	try {
+		const raw = localStorage.getItem('settings');
+		const s = raw ? JSON.parse(raw) : {};
+		return sanitizePresenceStatus(s.presence);
+	} catch (_e) {
+		return null
+	}
+}
+
+// v1.4.0 #12: handle a peer's self-declared presence status. Self-reports
+// are ignored, values whitelist-checked; an invalid status never touches
+// state. Status persists until the peer changes it or leaves the room.
+// v1.4.0 #12：处理同伴自声明的在线状态。忽略自己的回声，白名单校验值，
+// 非法状态不触碰任何状态。状态保持到对方更改或离开房间。
+export function handleClientStatus(idx, msg) {
+	const rd = roomsData[idx];
+	if (!rd || !msg || !msg.clientId) return;
+	if (msg.clientId === rd.myId) return; // ignore self / 忽略自己的回声
+	const s = sanitizePresenceStatus(msg.s);
+	if (!s) return;
+	rd.statusMap = rd.statusMap || {};
+	rd.statusMap[msg.clientId] = s;
+	if (activeRoomIndex === idx) {
+		renderUserList(false)
+	}
+}
+
+// v1.4.0 #12: settings-side presence change → reset per-connection flags and
+// broadcast the new status to every joined room (or stop sending when turned
+// off; already-visible statuses remain until the sender leaves — honest limit).
+// v1.4.0 #12：设置侧状态变更 → 复位各连接的已发标记并向所有已加入房间广播
+// 新状态（关闭则停止发送；已显示的状态保持到发送方离开——诚实边界）。
+window.addEventListener('jmltPresenceChanged', (e) => {
+	const st = (e && e.detail && sanitizePresenceStatus(e.detail.status)) || null;
+	roomsData.forEach((rd) => {
+		if (!rd || !rd.chat) return;
+		rd._presenceSent = false;
+		if (st && rd.chat.serverShared && typeof rd.chat.sendPresenceStatus === 'function') {
+			rd._presenceSent = rd.chat.sendPresenceStatus(st)
+		}
+	})
+});
 
 // Handle client secured event
 // 处理客户端安全连接事件
@@ -415,6 +477,9 @@ export function handleClientLeft(idx, clientId) {
 	if (activeRoomIndex === idx) addSystemMsg(msg, true);
 	rd.userList = rd.userList.filter(u => u.clientId !== clientId);
 	delete rd.userMap[clientId];
+	// v1.4.0 #12: a departed member's declared status must not linger
+	// v1.4.0 #12：离开成员的状态声明不允许残留
+	if (rd.statusMap) delete rd.statusMap[clientId];
 	clearTypingUser(idx, clientId); // P2: don't let a departed member's typing state linger
 	if (activeRoomIndex === idx) {
 		renderUserList(false);

@@ -383,7 +383,16 @@ export function createUserItem(user, isMe) {
 	const fingerprintHtml = fingerprint
 		? `<div class="member-fingerprint" title="Key fingerprint — verify with the peer out of band / 密钥指纹，请与对方线下核对">🔑 ${escapeHTML(fingerprint)}</div>`
 		: '';
-	div.innerHTML = `<span class="avatar"></span><div class="member-info"><div class="member-name">${safeUserName}${isMe?t('ui.me', ' (me)'):''}</div>${fingerprintHtml}</div>`;
+	// v1.4.0 #12: self-declared presence badge (only shown when that member
+	// actually opted in and broadcast a status; undeclared = no badge).
+	// v1.4.0 #12：自声明在线状态徽标（仅当对方真正开启并广播过才显示；
+	// 未声明 = 无徽标，不臆造数据）。
+	let statusBadge = '';
+	const st = (rd && rd.statusMap && rd.statusMap[user.clientId]) || null;
+	if (st === 'online') statusBadge = '<span class="member-status-badge" title="online">🟢</span>';
+	else if (st === 'away') statusBadge = '<span class="member-status-badge" title="away">🌙</span>';
+	else if (st === 'busy') statusBadge = '<span class="member-status-badge" title="busy">⛔</span>';
+	div.innerHTML = `<span class="avatar"></span><div class="member-info"><div class="member-name">${safeUserName}${statusBadge}${isMe?t('ui.me', ' (me)'):''}</div>${fingerprintHtml}</div>`;
 	const avatarEl = div.querySelector('.avatar');
 	if (avatarEl) {
 		const svg = createAvatarSVG(rawName);
