@@ -83,9 +83,61 @@ const STATIC_EXT = /\.(?:css|js|mjs|png|jpe?g|gif|svg|webp|avif|ico|woff2?|ttf|o
 
 self.addEventListener('fetch', (event) => {
 	const req = event.request;
-	if (req.method !== 'GET') return;
-
 	const url = new URL(req.url);
+
+	// ==================== Web Share Target (v1.3.0 #13) ====================
+	// 安卓 PWA 分享入口：系统分享面板把 文本/图片 POST 到这里。
+	// SECURITY（RULES.md 不变量 7 对照）：
+	// - 分享载荷只进内存里的 Cache 条目，等应用取走即焚（take = delete）
+	// - 不写 IndexedDB / localStorage，不做任何持久化
+	// - 只接受同源 POST ./share-target，其余一律不管
+	// iOS 不支持 share_target —— 属性差异，README 已注明。
+	if (req.method === 'POST' && url.origin === self.location.origin &&
+		url.pathname.replace(/\/+$/, '').endsWith('/share-target')) {
+		event.respondWith((async () => {
+			try {
+				const form = await req.formData();
+				const payload = {
+					title: String(form.get('title') || '').slice(0, 500),
+					text: String(form.get('text') || '').slice(0, 10000),
+					url: String(form.get('url') || '').slice(0, 2000),
+					files: []
+				};
+				const files = form.getAll('files');
+				let total = 0;
+				for (const f of files) {
+					if (!f || typeof f === 'string') continue;
+					// 每个文件 5MB、总量 10MB 上限，超出即丢弃（诚实降级）
+					if (f.size > 5 * 1024 * 1024 || total + f.size > 10 * 1024 * 1024) continue;
+					const buf = await f.arrayBuffer();
+					let bin = '';
+					const u8 = new Uint8Array(buf);
+					const CHUNK = 0x8000;
+					for (let i = 0; i < u8.length; i += CHUNK) {
+						bin += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK))
+					}
+					payload.files.push({
+						name: String(f.name || 'file').slice(0, 128),
+						type: String(f.type || 'application/octet-stream').slice(0, 128),
+						dataUrl: 'data:' + (f.type || 'application/octet-stream') + ';base64,' + btoa(bin)
+					});
+					total += f.size
+				}
+				const cache = await caches.open('jmlt-share-v1');
+				// 用合成的 GET 请求做键（Cache API 不允许 POST 条目）
+				await cache.put(new Request('./__share-payload'), new Response(JSON.stringify(payload), {
+					headers: { 'Content-Type': 'application/json' }
+				}));
+				// 302 回应用首页，页面读到 ?share=1 后自行取走载荷
+				return Response.redirect(new URL('./?share=1', self.location.origin).href, 302)
+			} catch (_err) {
+				return Response.redirect(new URL('./', self.location.origin).href, 302)
+			}
+		})());
+		return
+	}
+
+	if (req.method !== 'GET') return;
 
 	// 跨域请求（如 CDN、头像服务）不拦截
 	if (url.origin !== self.location.origin) return;

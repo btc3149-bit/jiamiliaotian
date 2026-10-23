@@ -1,12 +1,12 @@
 {
   "name": "jiamiliaotian",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "端到端加密房间",
   "main": "worker/index.js",
   "scripts": {
     "build": "vite build",
     "icons": "node scripts/gen-icons.mjs",
-    "test": "node test-crypto.mjs && node test-localHistory.mjs && node test-protocol.mjs",
+    "test": "node test-crypto.mjs && node test-localHistory.mjs && node test-protocol.mjs && node test-markdown.mjs && node test-export.mjs",
     "dev": " wrangler dev",
     "deploy": " wrangler deploy",
     "publish": " wrangler publish",

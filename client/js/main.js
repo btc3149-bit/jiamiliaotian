@@ -101,6 +101,11 @@ import { createVoiceRecorder } from './util.voice.js';
 // v1.2.0 #11: 离线发送队列 / Offline send queue
 import { isRoomConnected, enqueueSend } from './util.sendQueue.js';
 
+// v1.3.0 #6/#7: 设置面板渲染钩子 / render hooks for the settings panel
+import { renderRooms } from './room.js';
+import { renderChatArea } from './chat.js';
+import { appendLocalHistory } from './util.localHistory.js';
+
 // 从 ui.js 中导入 UI 界面相关的功能
 // Import user interface functions from ui.js
 import {	renderUserList,       // 渲染用户列表 / Render user list
@@ -156,6 +161,14 @@ window.notifyMessage = notifyMessage;
 window.setupEmojiPicker = setupEmojiPicker;
 window.handleFileMessage = handleFileMessage;
 window.downloadFile = downloadFile;
+// v1.3.0 #6/#7: settings panel lives in util.settings.js which cannot import
+// the renderers without a cycle — expose hooks instead.
+// v1.3.0 #6/#7：设置面板在 util.settings.js，直接导入渲染器会成环——改挂钩子。
+window.__jmltRenderRooms = () => renderRooms(activeRoomIndex);
+window.__jmltRenderChat = () => renderChatArea();
+window.__jmltAppendLocalHistory = (rd, entry) => {
+	try { appendLocalHistory(rd, entry) } catch (_e) { /* best-effort */ }
+};
 
 // 当 DOM 内容加载完成后执行初始化逻辑
 // Run initialization logic when the DOM content is fully loaded
@@ -305,6 +318,46 @@ window.addEventListener('DOMContentLoaded', () => {
 	// 设置图片粘贴功能
 	// Setup image paste functionality
 	const imagePasteHandler = setupImagePaste('.input-message-input');
+
+	// ==================== v1.3.0 #13: Web Share Target hand-off ====================
+	// SW 把系统分享的 文本/图片 暂存在 Cache（'./__share-payload'）后 302 回
+	// ?share=1；这里取走即焚：读一条、删一条、URL 清理。iOS 不支持（文档已注明）。
+	if (new URLSearchParams(window.location.search).get('share') === '1') {
+		(async () => {
+			try {
+				if (!('caches' in window)) return;
+				const cache = await caches.open('jmlt-share-v1');
+				const hit = await cache.match('./__share-payload');
+				await cache.delete('./__share-payload');
+				try { history.replaceState(null, '', location.pathname) } catch (_e) { /* keep query */ }
+				if (!hit) return;
+				const payload = await hit.json();
+				let filled = 0;
+				const parts = [];
+				const text = (payload.text || '').trim();
+				const title = (payload.title || '').trim();
+				const sharedUrl = (payload.url || '').trim();
+				if (text) parts.push(text);
+				else if (title && sharedUrl) parts.push(title);
+				if (sharedUrl && parts.indexOf(sharedUrl) === -1 && !text.includes(sharedUrl)) parts.push(sharedUrl);
+				const inputEl = document.querySelector('.input-message-input');
+				if (inputEl && parts.length) {
+					inputEl.innerText = parts.join('\n');
+					inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+					filled++
+				}
+				if (imagePasteHandler && Array.isArray(payload.files)) {
+					for (const f of payload.files) {
+						if (imagePasteHandler.addImage(f.dataUrl)) filled++
+					}
+				}
+				if (filled) {
+					inputEl && inputEl.focus();
+					addSystemMsg(t('system.share_received', 'Shared content added to the composer — nothing was stored.'), true)
+				}
+			} catch (_e) { /* hand-off is best-effort */ }
+		})()
+	}
 
 	// ==================== P2: typing signal + local draft ====================
 	// 输入事件三合一（各自节流/防抖）：

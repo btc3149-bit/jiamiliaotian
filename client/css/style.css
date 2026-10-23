@@ -2858,3 +2858,67 @@ html[data-mode="dark"] .chat-voice-btn:hover {
 html[data-mode="dark"] .voice-dur {
 	color: #999;
 }
+
+/* ==================== v1.3.0: room meta / markdown / misc ==================== */
+
+/* room list badges (#6) */
+.room-pin-badge {
+	font-size: 11px;
+	margin-left: 4px;
+}
+.room-group-badge {
+	font-size: 10px;
+	line-height: 1;
+	padding: 2px 6px;
+	border-radius: 8px;
+	margin-left: 5px;
+	background: rgba(53, 122, 232, .14);
+	color: #357ae8;
+	vertical-align: middle;
+}
+
+/* markdown rendering (#8) */
+.md-code {
+	background: rgba(0, 0, 0, .06);
+	border-radius: 4px;
+	padding: 1px 5px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: .92em;
+}
+.md-codeblock {
+	background: #1e1e1e;
+	color: #d4d4d4;
+	border-radius: 8px;
+	padding: 10px 12px;
+	overflow-x: auto;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: .9em;
+	margin: 4px 0;
+	white-space: pre;
+}
+.md-codeblock code {
+	background: transparent;
+	padding: 0;
+	color: inherit;
+}
+.md-link {
+	color: #357ae8;
+	text-decoration: underline;
+	word-break: break-all;
+}
+
+/* dark mode */
+html[data-mode="dark"] .room-group-badge {
+	background: rgba(122, 167, 240, .16);
+	color: #7aa7f0;
+}
+html[data-mode="dark"] .md-code {
+	background: rgba(255, 255, 255, .09);
+}
+html[data-mode="dark"] .md-codeblock {
+	background: #111;
+	color: #cfcfcf;
+}
+html[data-mode="dark"] .md-link {
+	color: #7aa7f0;
+}

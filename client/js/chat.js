@@ -35,6 +35,8 @@ import {
 	sanitizeVoicePayload,
 	formatVoiceDuration
 } from './util.voice.js';
+// v1.3.0 #8: whitelisted markdown rendering for text messages
+import { markdownToHtml } from './util.markdown.js';
 
 // v1.2.0 #9: render a validated voice payload as an inline audio player.
 // data: URL is escaped and javascript: stripped (same treatment as images).
@@ -173,7 +175,8 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 		const v = sanitizeVoicePayload(typeof text === 'object' ? text : null);
 		contentHtml = v ? renderVoiceHtml(v) : textToHTML('[voice]');
 	} else {
-		contentHtml = textToHTML(text);
+		// v1.3.0 #8: markdown rendering (escape-then-wrap, injection-safe)
+		contentHtml = markdownToHtml(typeof text === 'string' ? text : '');
 		if (meta && meta.mentions && meta.mentions.length) {
 			contentHtml = highlightMentionsInHtml(contentHtml, resolveMentionNames(meta.mentions));
 		}
@@ -269,7 +272,8 @@ export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, 
 		const v = sanitizeVoicePayload(typeof msg === 'object' ? msg : null);
 		contentHtml = v ? renderVoiceHtml(v) : textToHTML('[voice]');
 	} else {
-		contentHtml = textToHTML(msg);
+		// v1.3.0 #8: markdown rendering (escape-then-wrap, injection-safe)
+		contentHtml = markdownToHtml(typeof msg === 'string' ? msg : '');
 		if (meta && meta.mentions && meta.mentions.length) {
 			contentHtml = highlightMentionsInHtml(contentHtml, resolveMentionNames(meta.mentions));
 		}

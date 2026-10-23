@@ -184,6 +184,22 @@ export function setupImagePaste(inputSelector) {
 			currentImageDatas = [];
 			updatePlaceholderVisibility();
 		},
+		// v1.3.0 #13: push an externally-provided dataUrl into the same pipeline
+		// (used by the Web Share Target hand-off)
+		// v1.3.0 #13：把外部提供的 dataUrl 送进同一条管线（Share Target 交接用）
+		addImage: (dataUrl) => {
+			if (typeof dataUrl !== 'string' || dataUrl.indexOf('data:image/') !== 0) return false;
+			const { preview, removeBtn } = createImagePreview(dataUrl);
+			imagePreviewContainer.appendChild(preview);
+			currentImageDatas.push({ dataUrl, previewElement: preview });
+			on(removeBtn, 'click', () => {
+				preview.remove();
+				currentImageDatas = currentImageDatas.filter(img => img.dataUrl !== dataUrl);
+				updatePlaceholderVisibility();
+			});
+			updatePlaceholderVisibility();
+			return true
+		},
 		refreshPlaceholder: updatePlaceholderVisibility // 暴露 placeholder 更新函数
 	};
 }

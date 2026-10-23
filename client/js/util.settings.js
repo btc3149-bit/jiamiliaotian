@@ -25,6 +25,26 @@ import { clearAllLocalHistory } from './util.localHistory.js';
 import { enablePush, disablePush, isPushEnabled, isPushSupported } from './util.push.js';
 // v1.1.0 #2: panic wipe (double-confirmed local data removal)
 import { panicWipeWithConfirm } from './util.panic.js';
+// v1.3.0 #6: local room metadata (alias/group/pinned)
+import { roomHashOf, getRoomMeta, setRoomMeta } from './util.roomMeta.js';
+// v1.3.0 #7: encrypted chat archive (.jmlt)
+import {
+	collectExportMessages,
+	serializeArchive,
+	encryptArchive,
+	decryptArchive,
+	mergeArchiveMessages
+} from './util.exportArchive.js';
+// v1.3.0 #6/#7 helpers for the current-room section
+function currentRoom() {
+	try {
+		return (window.roomsData && window.roomsData[window.activeRoomIndex]) || null;
+	} catch (_e) { return null }
+}
+function refreshRoomViews() {
+	if (typeof window.__jmltRenderRooms === 'function') window.__jmltRenderRooms();
+	if (typeof window.__jmltRenderChat === 'function') window.__jmltRenderChat()
+}
 // Default settings
 // 默认设置
 const DEFAULT_SETTINGS = {
@@ -229,6 +249,52 @@ function setupSettingsPanel() {
 				<button type="button" id="settings-panic-wipe" class="settings-danger-btn">${t('settings.panic_wipe_btn', 'Wipe Everything')}</button>
 			</div>
 		</div>
+		<div class="settings-section">
+			<div class="settings-section-title">${t('settings.current_room', 'Current Room')}</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.room_alias', 'Room Alias (local only)')}</div>
+					<div class="settings-item-desc">${t('settings.room_alias_desc', 'Only changes the name YOU see. Room identity is password + hash — renaming never changes any security property.')}</div>
+				</div>
+				<div class="language-selector">
+					<input type="text" id="settings-room-alias" class="language-select" style="width:220px" maxlength="64" value="${escapeHTMLServerUrl(currentRoom() ? (getRoomMeta(roomHashOf(currentRoom().roomName || '')).alias || '') : '')}">
+				</div>
+			</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.room_group', 'Group Tag (local only)')}</div>
+					<div class="settings-item-desc">${t('settings.room_group_desc', 'A small badge shown next to the room name in your list.')}</div>
+				</div>
+				<div class="language-selector">
+					<input type="text" id="settings-room-group" class="language-select" style="width:220px" maxlength="32" value="${escapeHTMLServerUrl(currentRoom() ? (getRoomMeta(roomHashOf(currentRoom().roomName || '')).group || '') : '')}">
+				</div>
+			</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.room_pin', 'Pin This Room')}</div>
+					<div class="settings-item-desc">${t('settings.room_pin_desc', 'Pinned rooms float to the top of your list.')}</div>
+				</div>
+				<label class="switch">
+					<input type="checkbox" id="settings-room-pin" ${(currentRoom() && getRoomMeta(roomHashOf(currentRoom().roomName || '')).pinned) ? 'checked' : ''}>
+					<span class="slider"></span>
+				</label>
+			</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.export_archive', 'Export Encrypted Archive')}</div>
+					<div class="settings-item-desc">${t('settings.export_archive_desc', 'Downloads a password-encrypted .jmlt file of this room\'s messages. Encrypted locally with the room password (AES-256-GCM). Anyone with the file AND the room password can read it — guard both.')}</div>
+				</div>
+				<button type="button" id="settings-export-archive" class="settings-danger-btn" style="background:#357ae8;color:#fff">${t('settings.export_archive_btn', 'Export')}</button>
+			</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.import_archive', 'Import Encrypted Archive')}</div>
+					<div class="settings-item-desc">${t('settings.import_archive_desc', 'Merge a .jmlt archive into this room. It must have been exported from the SAME room (fingerprint is verified). Messages are deduplicated by id.')}</div>
+				</div>
+				<button type="button" id="settings-import-archive" class="settings-danger-btn" style="background:#357ae8;color:#fff">${t('settings.import_archive_btn', 'Choose File…')}</button>
+				<input type="file" id="settings-import-archive-file" accept=".jmlt,application/octet-stream" style="display:none">
+			</div>
+		</div>
 				<div class="settings-section">
 			<div class="settings-section-title">${t('settings.language', 'Language Settings')}</div>
 			<div class="settings-item">
@@ -423,6 +489,99 @@ function setupSettingsPanel() {
 	const panicWipeBtn = $('#settings-panic-wipe', settingsContent);
 	on(panicWipeBtn, 'click', () => {
 		panicWipeWithConfirm();
+	});
+	// ==================== v1.3.0 #6: room management ====================
+	const roomAliasInput = $('#settings-room-alias', settingsContent);
+	const roomGroupInput = $('#settings-room-group', settingsContent);
+	const roomPinSwitch = $('#settings-room-pin', settingsContent);
+	function saveRoomMetaFromUi() {
+		const rd = currentRoom();
+		if (!rd) return;
+		const hash = roomHashOf(rd.roomName || '');
+		setRoomMeta(hash, {
+			alias: roomAliasInput ? roomAliasInput.value : '',
+			group: roomGroupInput ? roomGroupInput.value : '',
+			pinned: roomPinSwitch ? roomPinSwitch.checked : false
+		});
+		refreshRoomViews()
+	}
+	on(roomAliasInput, 'change', saveRoomMetaFromUi);
+	on(roomGroupInput, 'change', saveRoomMetaFromUi);
+	on(roomPinSwitch, 'change', saveRoomMetaFromUi);
+	// ==================== v1.3.0 #7: encrypted archive ====================
+	function localTimestamp() {
+		const d = new Date();
+		const p = (n) => String(n).padStart(2, '0');
+		return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes())
+	}
+	on($('#settings-export-archive', settingsContent), 'click', async () => {
+		const rd = currentRoom();
+		if (!rd || !rd.chat || !rd.chat.credentials) {
+			alert(t('settings.export_no_room', 'Join a room first.'));
+			return
+		}
+		const password = rd.password || window.prompt(t('settings.export_ask_password', 'Room password (for encryption):') || '');
+		if (!password) return;
+		const fp = rd.chat.credentials.channel;
+		try {
+			const { msgs, skipped } = collectExportMessages(rd);
+			const json = serializeArchive(fp, msgs, skipped);
+			const bytes = await encryptArchive(json, password, fp);
+			const blob = new Blob([bytes], { type: 'application/octet-stream' });
+			const a = document.createElement('a');
+			a.href = URL.createObjectURL(blob);
+			a.download = 'jiamiliaotian-chat-' + String(fp).slice(0, 12) + '-' + localTimestamp() + '.jmlt';
+			document.body.appendChild(a);
+			a.click();
+			setTimeout(() => { URL.revokeObjectURL(a.href); a.remove() }, 1000);
+			window.addSystemMsg && window.addSystemMsg(t('settings.export_done', 'Archive exported ({n} messages, {s} file transfer(s) skipped). Guard the file — it is only as safe as where you keep it.').replace('{n}', String(msgs.length)).replace('{s}', String(skipped)), true)
+		} catch (err) {
+			window.addSystemMsg && window.addSystemMsg(t('settings.export_failed', 'Export failed: ') + (err && err.message || err), true)
+		}
+	});
+	const importFileInput = $('#settings-import-archive-file', settingsContent);
+	on($('#settings-import-archive', settingsContent), 'click', () => {
+		const rd = currentRoom();
+		if (!rd || !rd.chat || !rd.chat.credentials) {
+			alert(t('settings.export_no_room', 'Join a room first.'));
+			return
+		}
+		if (importFileInput) importFileInput.click()
+	});
+	on(importFileInput, 'change', async () => {
+		const file = importFileInput && importFileInput.files && importFileInput.files[0];
+		if (importFileInput) importFileInput.value = '';
+		if (!file) return;
+		const rd = currentRoom();
+		if (!rd || !rd.chat || !rd.chat.credentials) return;
+		const password = window.prompt(t('settings.import_ask_password', 'Room password (to decrypt the archive):') || '');
+		if (!password) return;
+		try {
+			const bytes = new Uint8Array(await file.arrayBuffer());
+			const payload = await decryptArchive(bytes, password, rd.chat.credentials.channel);
+			const { toAppend, dup } = mergeArchiveMessages(rd.messages, payload.msgs);
+			for (const m of toAppend) {
+				const entry = m.k === 's'
+					? { type: 'system', text: m.x, timestamp: m.ts }
+					: {
+						type: m.k, text: m.x, msgType: m.t, userName: m.u, timestamp: m.ts,
+						id: m.id, quote: m.q, ttl: m.ttl, edited: m.e,
+						reactions: null, mentions: null, mentionsMe: false,
+						deleted: false, burned: false, imported: true
+					};
+				rd.messages.push(entry);
+				// opt-in encrypted local history (no-op unless enabled)
+				try {
+					window.__jmltAppendLocalHistory && window.__jmltAppendLocalHistory(rd, entry)
+				} catch (_e) { /* best-effort */ }
+			}
+			// chronological order across merged devices
+			rd.messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+			refreshRoomViews();
+			window.addSystemMsg && window.addSystemMsg(t('settings.import_done', 'Imported {n} message(s) ({d} duplicate(s) skipped).').replace('{n}', String(toAppend.length)).replace('{d}', String(dup)), true)
+		} catch (err) {
+			window.addSystemMsg && window.addSystemMsg(t('settings.import_failed', 'Import failed — wrong password, wrong room, or corrupted file.'), true)
+		}
 	});
 	// P1-D: desktop-shell server URL (localhost-bundled client → remote worker).
 	// Validation: empty (revert to same-origin) or a valid https URL. Reload

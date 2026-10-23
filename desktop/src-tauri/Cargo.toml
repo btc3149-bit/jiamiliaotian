@@ -1,6 +1,6 @@
 [package]
 name = "jiamiliaotian"
-version = "1.2.0"
+version = "1.3.0"
 description = "True end-to-end encrypted chat, desktop & mobile shell"
 authors = ["jiamiliaotian"]
 edition = "2021"

@@ -26,6 +26,8 @@ import { reportPushSubscription } from './util.push.js';
 import { selectReplayable, dedupeReplayBatch } from './util.validate.js';
 // v1.2.0 #11: offline send queue flush
 import { flushSendQueue } from './util.sendQueue.js';
+// v1.3.0 #6: local-only room metadata (alias/group/pinned)
+import { roomHashOf, getRoomMeta, displayRoomName, sortRoomIndexes } from './util.roomMeta.js';
 import {
 	renderMainHeader,
 	renderUserList
@@ -174,17 +176,33 @@ export function setSidebarAvatar(userName) {
 export function renderRooms(activeId = 0) {
 	const roomList = $id('room-list');
 	roomList.innerHTML = '';
-	roomsData.forEach((rd, i) => {
+	// v1.3.0 #6: pinned rooms float to the top (display order only — the
+	// roomsData array order and switchRoom indices are untouched).
+	// v1.3.0 #6：置顶房间排最前（只影响显示顺序——roomsData 数组与 switchRoom
+	// 下标完全不动）。
+	const order = sortRoomIndexes(roomsData.map((_, i) => i), (i) => getRoomMeta(roomHashOf(roomsData[i].roomName)));
+	order.forEach((i) => {
+		const rd = roomsData[i];
+		const meta = getRoomMeta(roomHashOf(rd.roomName));
 		const div = createElement('div', {
 			class: 'room' + (i === activeId ? ' active' : ''),
 			onclick: () => switchRoom(i)
 		});
-		const safeRoomName = escapeHTML(rd.roomName);
+		// v1.3.0 #6: alias overrides display name; pin/group are badges.
+		// NOTE: renaming only changes what YOU see — room identity stays
+		// password+hash, zero security properties change.
+		// v1.3.0 #6：alias 覆盖显示名；pin/group 是徽标。改名只改你自己看到的
+		// 名字——房间身份仍是密码+哈希，安全属性零变化。
+		const displayName = displayRoomName(rd.roomName, meta);
+		const safeRoomName = escapeHTML(displayName);
+		let badges = '';
+		if (meta.pinned) badges += '<span class="room-pin-badge" title="pinned">📌</span>';
+		if (meta.group) badges += `<span class="room-group-badge">${escapeHTML(meta.group)}</span>`;
 		let unreadHtml = '';
 		if (rd.unreadCount && i !== activeId) {
 			unreadHtml = `<span class="room-unread-badge">${rd.unreadCount>99?'99+':rd.unreadCount}</span>`
 		}
-		div.innerHTML = `<div class="info"><div class="title">#${safeRoomName}</div></div>${unreadHtml}`;
+		div.innerHTML = `<div class="info"><div class="title">#${safeRoomName}${badges}</div></div>${unreadHtml}`;
 		roomList.appendChild(div)
 	})
 }
