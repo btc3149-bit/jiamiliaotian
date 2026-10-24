@@ -39,6 +39,15 @@ macOS 产物为 ad-hoc 签名（未加入 Apple 开发者计划），首次打�
 
 Tauri 2 同一代码库可出 Android/iOS。**注意：移动端构建无法在 CI 里完成签名/上架，需要本机 SDK。**
 
+### 零配置开箱（v1.8.0 #20：构建期烤入默认服务器）
+
+桌面/安卓壳不再要求用户手填服务器地址：打 tag 前在仓库 **Settings → Secrets and variables → Actions → Variables** 建 `JMLT_DEFAULT_SERVER_URL`（值如 `https://your-worker.workers.dev`），CI 构建时经 `JMLT_DEFAULT_SERVER` 注入并烤进产物——装上即连你的部署。规则：
+
+- 仅接受 `https://` origin（消毒函数 `sanitizeBakedServerUrl`，任何可疑输入一律回退同源，绝不降级 http）
+- 优先级：`?server=` 参数 > 应用内手动设置 > **烤入默认** > 同源——烤入值永远可被手动覆盖，不是锁定
+- 它是仓库**变量（Variables）不是 secret**：地址会编译进分发的二进制里，本来就不是秘密
+- 不设置该变量时，行为与旧版完全一致（手动填 / 同源）
+
 ## Android
 
 ```bash

@@ -62,6 +62,10 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
 
       - name: Build web client
+        env:
+          # v1.8.0 #20: optional build-time baked default server URL
+          # (repository VARIABLE, not secret — it ships inside the binaries).
+          JMLT_DEFAULT_SERVER: ${{ vars.JMLT_DEFAULT_SERVER_URL }}
         run: |
           npm ci --ignore-scripts
           npm run build

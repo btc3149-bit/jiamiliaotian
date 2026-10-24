@@ -12,7 +12,8 @@ import {
 	isValidFileVolumeMessage,
 	sanitizePresenceStatus,
 	sanitizeCallSignal,
-	parseStunServers
+	parseStunServers,
+	sanitizeBakedServerUrl
 } from './client/js/util.validate.js';
 import {
 	formatVoiceDuration,
@@ -184,6 +185,18 @@ check('rejects out-of-range ports', parseStunServers('stun:h.example:0').length 
 check('dedupes repeated entries', parseStunServers('stun:a.example:1 stun:a.example:1').length === 1);
 check('caps at 4 servers', parseStunServers('stun:a:1 stun:b:1 stun:c:1 stun:d:1 stun:e:1').length === 4);
 check('non-string / empty input', JSON.stringify(parseStunServers(null)) === '[]' && JSON.stringify(parseStunServers('')) === '[]' && JSON.stringify(parseStunServers(42)) === '[]');
+
+console.log('=== test-protocol: v1.8.0 baked default server sanitizer ===');
+check('accepts plain https origin', sanitizeBakedServerUrl('https://nodecrypt.example.workers.dev') === 'https://nodecrypt.example.workers.dev');
+check('accepts https with port', sanitizeBakedServerUrl('https://chat.example.com:8443') === 'https://chat.example.com:8443');
+check('strips trailing slash (origin form)', sanitizeBakedServerUrl('https://chat.example.com/') === 'https://chat.example.com');
+check('trims whitespace', sanitizeBakedServerUrl('  https://chat.example.com  ') === 'https://chat.example.com');
+check('rejects http', sanitizeBakedServerUrl('http://chat.example.com') === '');
+check('rejects path-bearing urls', sanitizeBakedServerUrl('https://example.com/app') === '');
+check('rejects query strings', sanitizeBakedServerUrl('https://example.com/?x=1') === '');
+check('rejects hash fragments', sanitizeBakedServerUrl('https://example.com/#room') === '');
+check('rejects userinfo / credentials', sanitizeBakedServerUrl('https://user:pass@example.com') === '');
+check('rejects garbage / empty / non-string', sanitizeBakedServerUrl('not a url') === '' && sanitizeBakedServerUrl('') === '' && sanitizeBakedServerUrl(null) === '' && sanitizeBakedServerUrl(42) === '');
 
 console.log(`\ntest-protocol: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

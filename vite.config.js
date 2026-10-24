@@ -2,6 +2,16 @@ import {
 	defineConfig
 } from 'vite';
 export default defineConfig({
+	// v1.8.0 #20: build-time baked default server URL for bundled shells
+	// (desktop/Android). Set via the JMLT_DEFAULT_SERVER env at build time
+	// (CI reads the JMLT_DEFAULT_SERVER_URL repository variable). Sanitized
+	// client-side (https only); empty string = same-origin fallback unchanged.
+	// v1.8.0 #20：构建期烤入的默认服务器地址（供桌面/安卓壳零配置开箱）。
+	// 构建时通过 JMLT_DEFAULT_SERVER 环境变量注入（CI 读取仓库变量
+	// JMLT_DEFAULT_SERVER_URL）。客户端侧再消毒（仅 https）；空串 = 同源回退行为不变。
+	define: {
+		__JMLT_DEFAULT_SERVER__: JSON.stringify(process.env.JMLT_DEFAULT_SERVER || ''),
+	},
 	// Root directory
 	// 根目录
 	root: 'client',

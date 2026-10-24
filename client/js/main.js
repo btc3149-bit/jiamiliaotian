@@ -130,20 +130,29 @@ import {	renderUserList,       // 渲染用户列表 / Render user list
 	initFlipCard          // 初始化翻转卡片功能 / Initialize flip card functionality
 } from './ui.js';
 
+// v1.8.0 #20: sanitize the build-time baked default server URL.
+import { sanitizeBakedServerUrl } from './util.validate.js';
+
 // P1-D: optional server override for desktop shells (Tauri bundles the web
 // client as a local asset, so "same-origin" no longer points at the backend).
-// Priority: ?server= URL param > settings panel value (localStorage) > same-origin.
+// Priority: ?server= URL param > settings panel value (localStorage) >
+// build-time baked default (v1.8.0 #20, JMLT_DEFAULT_SERVER) > same-origin.
 // SECURITY: the override only changes which E2EE server the client talks to;
-// all crypto stays client-side. Desktop shells must use https/wss.
+// all crypto stays client-side. Baked defaults are https-only (sanitized).
 // P1-D: 桌面壳（Tauri）的服务器地址覆盖——前端作为本地资源打包，"同源"不再
-// 指向后端。优先级：?server= 参数 > 设置面板（localStorage）> 同源。
+// 指向后端。优先级：?server= 参数 > 设置面板（localStorage）> 构建期烤入
+// 默认（v1.8.0 #20，JMLT_DEFAULT_SERVER）> 同源。
 const serverUrlParam = (() => {
 	try { return new URLSearchParams(window.location.search).get('server') || ''; } catch (_e) { return ''; }
 })();
 const serverUrlStored = (() => {
 	try { return localStorage.getItem('jmlt_server_url') || ''; } catch (_e) { return ''; }
 })();
-const serverUrl = (serverUrlParam || serverUrlStored).trim().replace(/\/+$/, '');
+// v1.8.0 #20: baked at vite build time so bundled shells ship zero-config.
+// v1.8.0 #20：构建期烤入，让捆绑壳开箱即用（装上即连，无需手动填地址）。
+const serverUrlBaked = sanitizeBakedServerUrl(
+	(typeof __JMLT_DEFAULT_SERVER__ === 'string') ? __JMLT_DEFAULT_SERVER__ : '');
+const serverUrl = (serverUrlParam || serverUrlStored || serverUrlBaked).trim().replace(/\/+$/, '');
 window.JMLT_SERVER_URL = serverUrl;
 
 // 设置全局配置参数

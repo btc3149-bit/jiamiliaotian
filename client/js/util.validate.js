@@ -178,3 +178,26 @@ export function parseStunServers(input, cap = 4) {
 	}
 	return out;
 }
+
+// v1.8.0 #20: sanitize a build-time baked default server URL (injected via
+// vite define / JMLT_DEFAULT_SERVER). Strict: https ONLY (release builds
+// ship this to end users), origin only (no path/query/hash/userinfo),
+// credentials rejected. Anything questionable → '' (same-origin fallback).
+// This is a convenience default, never a trust decision: the E2EE channel
+// fingerprint verification still applies on top.
+// v1.8.0 #20：消毒构建期烤入的默认服务器地址（vite define /
+// JMLT_DEFAULT_SERVER 注入）。严格：仅 https（发布构建会把它带给最终用户）、
+// 仅 origin（不带路径/查询/哈希/用户信息）、拒绝凭据。任何可疑输入 → ''
+// （回退同源）。这只是便利性默认值，不是信任决策：E2EE 通道指纹校验依然在其上生效。
+export function sanitizeBakedServerUrl(raw) {
+	if (typeof raw !== 'string' || !raw.trim()) return '';
+	try {
+		const u = new URL(raw.trim());
+		if (u.protocol !== 'https:' || !u.hostname) return '';
+		if (u.username || u.password || u.search || u.hash) return '';
+		if (u.pathname && u.pathname !== '/') return '';
+		return u.origin;
+	} catch (_e) {
+		return '';
+	}
+}
