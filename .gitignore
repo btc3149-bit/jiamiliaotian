@@ -50,3 +50,5 @@ client/build/
 coverage/
 dist/
 新增功能.md
+# esbuild temp bundle from test-ratchet-integration.mjs
+.tmp-nodecrypt.mjs

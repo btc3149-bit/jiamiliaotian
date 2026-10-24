@@ -306,7 +306,7 @@ window.addEventListener('DOMContentLoaded', () => {
 							d: payload,
 							id: rd.chat.genMessageId()
 						};
-						const encryptedClientMessage = rd.chat.encryptClientMessage(clientMessagePayload, targetClient.shared);
+						const encryptedClientMessage = rd.chat.encryptChannelMessage(rd.privateChatTargetId, clientMessagePayload);
 						const serverRelayPayload = {
 							a: 'c',
 							p: encryptedClientMessage,
@@ -605,7 +605,7 @@ window.addEventListener('DOMContentLoaded', () => {
 							d: messageContent,
 							id: rd.chat.genMessageId()
 						};
-						const encryptedClientMessage = rd.chat.encryptClientMessage(clientMessagePayload, targetClient.shared);
+						const encryptedClientMessage = rd.chat.encryptChannelMessage(rd.privateChatTargetId, clientMessagePayload);
 						const serverRelayPayload = {
 							a: 'c',
 							p: encryptedClientMessage,
@@ -641,7 +641,7 @@ window.addEventListener('DOMContentLoaded', () => {
 							clientMessagePayload.q = { u: reply.name, x: reply.snippet };
 						}
 						if (ttl) clientMessagePayload.ttl = ttl;
-						const encryptedClientMessage = rd.chat.encryptClientMessage(clientMessagePayload, targetClient.shared);
+						const encryptedClientMessage = rd.chat.encryptChannelMessage(rd.privateChatTargetId, clientMessagePayload);
 						const serverRelayPayload = {
 							a: 'c',
 							p: encryptedClientMessage,
@@ -707,7 +707,7 @@ window.addEventListener('DOMContentLoaded', () => {
 							d: msgWithUser,
 							id: rd.chat.genMessageId()
 						};
-						const encryptedClientMessage = rd.chat.encryptClientMessage(clientMessagePayload, targetClient.shared);
+						const encryptedClientMessage = rd.chat.encryptChannelMessage(rd.privateChatTargetId, clientMessagePayload);
 						const serverRelayPayload = {
 							a: 'c',
 							p: encryptedClientMessage,

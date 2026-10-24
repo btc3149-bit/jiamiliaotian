@@ -19,6 +19,11 @@ import {
 import {
 	Buffer
 } from 'buffer';
+import {
+	PeerRatchet,
+	isRatchetEligible,
+	RATCHET_WIRE_PREFIX
+} from './util.ratchet.js';
 window.Buffer = Buffer;
 
 // Main NodeCrypt class for secure communication
@@ -65,6 +70,11 @@ class NodeCrypt {
 		this.reconnect = null;
 		this.ping = null;
 		this.channel = {};
+		// v1.6.0 #15: ratchet state lives INSIDE each channel entry (ch.ratchet)
+		// so it dies exactly when the channel does — reconnect = new ECDH =
+		// new root, no orphaned chains. Memory-only, never persisted (RULES 3).
+		// v1.6.0 #15：ratchet 状态直接挂在每个 channel 条目上（ch.ratchet），
+		// 通道销毁即随之销毁——重连=新 ECDH=新根，不存在孤儿链。仅存内存，绝不落盘。
 		this.setCredentials = this.setCredentials.bind(this);
 		this.connect = this.connect.bind(this);
 		this.destruct = this.destruct.bind(this);
@@ -292,6 +302,7 @@ class NodeCrypt {
 							username: null,
 							keys: this.clientEc.genKeyPair(),
 							shared: null,
+							kv2: false
 						};
 						payloads[clientId] = this.channel[clientId].keys.getPublic('hex')
 					}
@@ -333,6 +344,7 @@ class NodeCrypt {
 						username: null,
 						keys: this.clientEc.genKeyPair(),
 						shared: null,
+						kv2: false
 					};
 					this.sendMessage(this.encryptServerMessage({
 						a: 'c',
@@ -358,7 +370,14 @@ class NodeCrypt {
 			return
 		}
 		if (serverDecrypted.a === 'c' && this.channel[serverDecrypted.c] && this.channel[serverDecrypted.c].shared) {
-			const clientDecrypted = this.decryptClientMessage(serverDecrypted.p, this.channel[serverDecrypted.c].shared);
+			// v1.6.0: route every peer payload through the ratchet-aware
+			// decryptor. Legacy wires decrypt exactly as before; 'KV2|' wires
+			// (impossible to collide with legacy — base64 never contains '|')
+			// go through the per-peer ratchet. Downgrade guard lives inside.
+			// v1.6.0：所有对端载荷统一走 ratchet 感知解密器。legacy 线格式行为
+			// 不变；'KV2|' 线格式（不可能与 legacy 撞型——base64 不含 '|'）走
+			// 逐对端 ratchet。降级防护内置。
+			const clientDecrypted = this.decryptPeerMessage(serverDecrypted.p, serverDecrypted.c);
 			// SECURITY: log only the action type, never the payload
 			this.logEvent('onMessage-client-decrypted', clientDecrypted.a);
 			if (!this.isObject(clientDecrypted) || !this.isString(clientDecrypted.a)) {
@@ -366,6 +385,23 @@ class NodeCrypt {
 			}
 			if (clientDecrypted.a === 'u' && this.isString(clientDecrypted.p) && clientDecrypted.p.match(/\S+/) && !this.channel[serverDecrypted.c].username) {
 				this.channel[serverDecrypted.c].username = clientDecrypted.p.replace(/^\s+/, '').replace(/\s+$/, '');
+				// v1.6.0 #15: announce our KV2 ratchet capability. Legacy-encrypted
+				// (this is channel setup); old peers hit no action branch and
+				// drop it harmlessly, new peers flip their kv2 flag on receipt.
+				// v1.6.0 #15：应答本端 KV2 ratchet 能力。仍用 legacy 加密（这属于
+				// 通道建立阶段）；老客户端没有对应分支直接忽略，新客户端收到即置 kv2。
+				try {
+					this.sendMessage(this.encryptServerMessage({
+						a: 'c',
+						p: this.encryptClientMessage({
+							a: 'cap',
+							kv: 2
+						}, this.channel[serverDecrypted.c].shared),
+						c: serverDecrypted.c
+					}, this.serverShared))
+				} catch (error) {
+					this.logEvent('onMessage-cap-send', error, 'error')
+				}
 				if (this.callbacks.onClientSecured) {
 					try {
 						this.callbacks.onClientSecured({
@@ -528,6 +564,68 @@ class NodeCrypt {
 					} catch (error) {
 						this.logEvent('onMessage-client-call-callback', error, 'error')
 					}
+				}
+				return
+			}
+			if (clientDecrypted.a === 'cap' && clientDecrypted.kv === 2) {
+				// v1.6.0 #15: peer speaks the KV2 ratchet protocol. From now on
+				// ratchet-eligible payloads to/from this peer ride the chain;
+				// the downgrade guard refuses legacy content from them.
+				// v1.6.0 #15：对端具备 KV2 ratchet 能力。此后与该对端之间的合格
+				// 载荷走链加密；降级防护同时拒收其 legacy 内容。
+				this.channel[serverDecrypted.c].kv2 = true;
+				return
+			}
+			if (clientDecrypted.a === 'rk') {
+				// v1.6.0 #15: rekey OFFER. Only the non-initiator side (the peer
+				// whose public key sorts LATER) ever accepts one — both sides
+				// derive the same arbitration from the channel keys, so this
+				// cannot double-fire. Validates gen = activeGen+1 and a 64-hex
+				// Curve25519 pubkey, derives the new root the same way the
+				// channel root was built (ECDH ⊕ password), seeds, activates,
+				// acks with 'rka' on the legacy path.
+				// v1.6.0 #15：rekey 要约。只有非发起方（公钥字典序较大的一方）
+				// 会接受——双方用同一套通道密钥仲裁，不可能双方同时发起。校验
+				// g=activeGen+1 与 64 位十六进制 Curve25519 公钥，按与通道根完全
+				// 相同的方式（ECDH ⊕ 口令）派生新根，seed+activate，legacy 路径回 'rka'。
+				const ch = this.channel[serverDecrypted.c];
+				if (!ch || !ch.ratchet || ch.ratchet.canInitiateRekey) {
+					return
+				}
+				if (!this.isString(clientDecrypted.pub) || !/^[0-9a-f]{64}$/.test(clientDecrypted.pub)) {
+					return
+				}
+				if (clientDecrypted.g !== ch.ratchet.activeGeneration() + 1) {
+					return
+				}
+				try {
+					const newRoot = Buffer.from(this.xorHex(ch.keys.derive(this.clientEc.keyFromPublic(clientDecrypted.pub, 'hex').getPublic()).toString('hex').padEnd(64, '8').substr(0, 64), this.credentials.password), 'hex');
+					if (!ch.ratchet.seedRoot(clientDecrypted.g, new Uint8Array(newRoot))) {
+						return
+					}
+					// Receiver switches its SEND side immediately; the offer's
+					// generation stays readable during the transition window.
+					// 接收方发送侧立即切新代；要约代的接收态在过渡窗口内保留。
+					ch.ratchet.activateGen(clientDecrypted.g);
+					this.sendMessage(this.encryptServerMessage({
+						a: 'c',
+						p: this.encryptClientMessage({
+							a: 'rka',
+							g: clientDecrypted.g
+						}, ch.shared),
+						c: serverDecrypted.c
+					}, this.serverShared))
+				} catch (error) {
+					this.logEvent('onMessage-rekey-offer', error, 'error')
+				}
+				return
+			}
+			if (clientDecrypted.a === 'rka') {
+				// v1.6.0 #15: rekey ACK — the initiator flips its send side.
+				// v1.6.0 #15：rekey 确认——发起方切换发送侧。
+				const ch = this.channel[serverDecrypted.c];
+				if (ch && ch.ratchet && clientDecrypted.g === ch.ratchet.activeGeneration() + 1) {
+					ch.ratchet.activateGen(clientDecrypted.g)
 				}
 				return
 			}
@@ -743,14 +841,19 @@ class NodeCrypt {
 				let payloads = {};
 				for (const clientId in this.channel) {
 					if (this.channel[clientId].shared && this.channel[clientId].username) {
-						payloads[clientId] = this.encryptClientMessage(Object.assign({
+						// v1.6.0 #15: per-peer content encryption entry point.
+						// Negotiated peers get ratchet wires; if a peer's chain
+						// fails we SKIP that peer — never downgrade to legacy.
+						// v1.6.0 #15：逐对端内容加密入口。已协商对端收 ratchet 线
+						// 格式；某对端链加密失败则跳过该对端——绝不降级回 legacy。
+						payloads[clientId] = this.encryptChannelMessage(clientId, Object.assign({
 							a: 'm',
 							t: type,
 							d: data,
 							id: messageId
-						}, extras || {}), this.channel[clientId].shared);
-						if (payloads[clientId].length === 0) {
-							return (false)
+						}, extras || {}));
+						if (!payloads[clientId] || payloads[clientId].length === 0) {
+							delete payloads[clientId]
 						}
 					}
 				}
@@ -1126,10 +1229,14 @@ class NodeCrypt {
 					});
 				}
 				if (msgs.length === 0) return (false);
-				const clientMessagePayload = this.encryptClientMessage({
+				// v1.6.0 #15: replay batches are ratchet-eligible content —
+				// they ride the chain when kv2 is negotiated with the target.
+				// v1.6.0 #15：重播批次属于 ratchet 合格内容——与目标协商 kv2 后走链。
+				const clientMessagePayload = this.encryptChannelMessage(targetId, {
 					a: 'rs',
 					msgs
-				}, target.shared);
+				});
+				if (!clientMessagePayload || clientMessagePayload.length === 0) return (false);
 				const serverRelayPayload = this.encryptServerMessage({
 					a: 'c',
 					p: clientMessagePayload,
@@ -1261,6 +1368,149 @@ class NodeCrypt {
 			this.logEvent('decryptClientMessage', error, 'error')
 		}
 		return (decrypted)
+	}
+
+	// v1.6.0 #15: lazily create (or fetch) the per-peer ratchet. The root is
+	// the existing per-connection per-peer ECDH⊕password shared secret; the
+	// role arbitration (which directional chain we send on, and who may
+	// initiate rekeys) comes from the lexicographic order of the two
+	// Curve25519 public keys — both peers compute the same order, so the
+	// sender's send chain always equals the receiver's recv chain.
+	// v1.6.0 #15：懒创建/获取逐对端 ratchet。根 = 既有的每连接每对端
+	// ECDH⊕口令 shared；角色仲裁（用哪条方向链发送、谁可发起 rekey）由双方
+	// Curve25519 公钥的字典序决定——两端算出同一结论，发送方的 send 链必然
+	// 等于接收方的 recv 链。
+	getRatchet(clientId) {
+		const ch = this.channel[clientId];
+		if (!ch || !(ch.shared instanceof Uint8Array) || ch.shared.length !== 32 || !ch.peerPub || !ch.keys) {
+			return null
+		}
+		if (ch.ratchet instanceof PeerRatchet) {
+			return ch.ratchet
+		}
+		try {
+			const myPub = ch.keys.getPublic('hex');
+			const isFirst = myPub < ch.peerPub;
+			ch.ratchet = new PeerRatchet({
+				rootKey: new Uint8Array(ch.shared),
+				isFirst: isFirst,
+				canInitiateRekey: isFirst
+			});
+			return ch.ratchet
+		} catch (error) {
+			this.logEvent('getRatchet', error, 'error');
+			return null
+		}
+	}
+
+	// v1.6.0 #15: the single content-encryption entry point. Ratchet-eligible
+	// payloads ('m' except file_* volumes, 'rs' batches) ride the per-peer
+	// chain once kv2 is negotiated; everything else — and everything before
+	// negotiation — uses the legacy session key. If the peer is negotiated
+	// but the chain fails, we fail CLOSED (no silent downgrade to legacy).
+	// v1.6.0 #15：内容加密唯一入口。kv2 协商完成后，合格载荷（'m' 除文件分卷、
+	// 'rs' 批次）走逐对端链；其余载荷与协商前的载荷一律 legacy 会话密钥。
+	// 对端已协商但链加密失败时 fail closed——绝不悄悄降级回 legacy。
+	encryptChannelMessage(clientId, payloadObj) {
+		const ch = this.channel[clientId];
+		if (!ch || !ch.shared || !ch.username) {
+			return ''
+		}
+		// Only ratchet-eligible payloads ride the chain ('m' except file_*
+		// volumes, 'rs' batches); file volumes and metadata actions stay on
+		// the legacy session key by design (documented honest boundary).
+		// 只有合格载荷走链（'m' 除文件分卷、'rs' 批次）；文件分卷与元数据类
+		// 按设计留在 legacy 会话密钥（诚实边界已写入 Release）。
+		if (ch.kv2 === true && isRatchetEligible(payloadObj)) {
+			const ratchet = this.getRatchet(clientId);
+			if (!ratchet) {
+				return ''
+			}
+			const wire = ratchet.encryptOutgoing(payloadObj);
+			if (!wire) {
+				return ''
+			}
+			if (ratchet.shouldRekey()) {
+				this.initiateRekey(clientId)
+			}
+			return wire
+		}
+		return this.encryptClientMessage(payloadObj, ch.shared)
+	}
+
+	// v1.6.0 #15: the single content-decryption entry point (see the call
+	// site in onMessage). 'KV2|' wires ride the chain — and implicitly prove
+	// the peer's KV2 capability, so the flag flips here too. Legacy wires
+	// decrypt as before, but once kv2 is negotiated a peer sending legacy
+	// CONTENT ('m'/'rs') is treated as a downgrade attempt and dropped:
+	// metadata actions still pass (both sides keep them on legacy by design).
+	// v1.6.0 #15：内容解密唯一入口（见 onMessage 调用点）。'KV2|' 线格式走链
+	// ——同时隐式证明对端具备 KV2 能力，此处顺带置位标志。legacy 线格式照旧
+	// 解密；但 kv2 已协商后，对端再发 legacy 内容（'m'/'rs'）按降级攻击处理
+	// 直接丢弃：元数据类 action 照常放行（双方本就约定其留在 legacy）。
+	decryptPeerMessage(wire, clientId) {
+		const ch = this.channel[clientId];
+		if (!ch || !ch.shared) {
+			return {}
+		}
+		if (this.isString(wire) && wire.indexOf(RATCHET_WIRE_PREFIX + '|') === 0) {
+			ch.kv2 = true;
+			const ratchet = this.getRatchet(clientId);
+			if (!ratchet) {
+				return {}
+			}
+			const obj = ratchet.decryptIncoming(wire);
+			return (obj && typeof obj === 'object') ? obj : {}
+		}
+		const obj = this.decryptClientMessage(wire, ch.shared);
+		// Downgrade guard: negotiated peers must send eligible content over
+		// the chain. Legacy 'm' file volumes and metadata actions still pass.
+		// 降级防护：已协商对端的合格内容必须走链。legacy 的文件分卷 'm' 与
+		// 元数据类照常放行。
+		if (ch.kv2 === true && obj && isRatchetEligible(obj)) {
+			this.logEvent('decryptPeerMessage', 'downgraded legacy content refused', 'error');
+			return {}
+		}
+		return obj
+	}
+
+	// v1.6.0 #15: start a rekey handshake with a peer. We generate a fresh
+	// ephemeral Curve25519 pair, derive the new root exactly like a channel
+	// root (ECDH against the peer's channel key ⊕ password), seed generation
+	// N+1 locally and send the offer ('rk') on the legacy path. The peer
+	// acks with 'rka'; only then does our SEND side switch (recv accepts
+	// both generations during the transition window).
+	// v1.6.0 #15：与对端发起 rekey 握手。生成全新临时 Curve25519 密钥对，按
+	// 通道根完全相同的方式派生新根（对通道对端公钥做 ECDH ⊕ 口令），本地
+	// seed 第 N+1 代并用 legacy 路径发要约（'rk'）。对端回 'rka' 后我方发送
+	// 侧才切换（过渡窗口内接收侧两代都能解）。
+	initiateRekey(clientId) {
+		const ch = this.channel[clientId];
+		if (!ch || !ch.shared || ch.kv2 !== true || !ch.ratchet || !ch.ratchet.canInitiateRekey) {
+			return false
+		}
+		try {
+			const rekeyPair = this.clientEc.genKeyPair();
+			const newPub = rekeyPair.getPublic('hex');
+			const newRoot = Buffer.from(this.xorHex(rekeyPair.derive(this.clientEc.keyFromPublic(ch.peerPub, 'hex').getPublic()).toString('hex').padEnd(64, '8').substr(0, 64), this.credentials.password), 'hex');
+			const gen = ch.ratchet.activeGeneration() + 1;
+			if (!ch.ratchet.seedRoot(gen, new Uint8Array(newRoot))) {
+				return false
+			}
+			this.sendMessage(this.encryptServerMessage({
+				a: 'c',
+				p: this.encryptClientMessage({
+					a: 'rk',
+					g: gen,
+					pub: newPub
+				}, ch.shared),
+				c: clientId
+			}, this.serverShared));
+			return true
+		} catch (error) {
+			this.logEvent('initiateRekey', error, 'error');
+			return false
+		}
 	}
 
 	// Human-verifiable fingerprint of the E2EE channel with a peer.
@@ -1460,3 +1710,7 @@ class NodeCrypt {
 if (typeof window !== 'undefined') {
 	window.NodeCrypt = NodeCrypt
 }
+
+// Named export for Node-based tests (browser build is unaffected).
+// 具名导出供 Node 测试使用（浏览器构建不受影响）。
+export { NodeCrypt };
