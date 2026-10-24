@@ -1,11 +1,15 @@
 // Import necessary modules
 // 导入必要的模块
-import { deflate, inflate } from 'fflate';
+import { deflate, inflate, Deflate } from 'fflate';
 import { showFileUploadModal } from './util.fileUpload.js';
 import { imageFileToCleanFile } from './util.image.js';
 import { t } from './util.i18n.js';
 // v1.2.0 #17: resume-request validation
 import { sanitizeResumeRequest } from './util.validate.js';
+// v1.7.0 #19: incremental SHA-256 (streaming hash of large files without
+// holding the whole file in memory).
+// v1.7.0 #19：增量 SHA-256（大文件流式哈希，无需整文件驻留内存）。
+import { sha256 } from 'js-sha256';
 
 // v1.2.0 #17: sender keeps volume data in memory for a retention window so a
 // receiver can request re-sends of lost volumes. Cap: 16MB of base64 payload —
@@ -15,6 +19,98 @@ import { sanitizeResumeRequest } from './util.validate.js';
 // 上限 16MB base64 载荷——超限传输放弃续传（诚实上限，仅内存，不落盘）。
 const RESUME_RETENTION_MS = 5 * 60 * 1000;
 const RESUME_PAYLOAD_CAP = 16 * 1024 * 1024;
+
+// v1.7.0 #19: honest transfer size cap. Everything is memory-only (zero
+// server storage, RULES.md invariant 4), so the transfer pipeline must stay
+// inside sane RAM bounds: volumes live in memory on BOTH ends until
+// consumed. 256 MB per transfer (single file or archive total) keeps peak
+// memory around ~350 MB worst case — well under typical mobile/desktop
+// budgets. Oversized transfers are refused with a clear message instead of
+// crashing the tab.
+// v1.7.0 #19：诚实的传输体积上限。全部仅存内存（服务器零存储，RULES 不变量
+// 4），传输管线必须留在合理的内存边界内：分卷在两端消费前都驻留内存。
+// 单次传输（单文件或归档总量）256MB——最坏峰值内存约 350MB，远低于常规
+// 手机/桌面预算。超限传输直接拒绝并给出明确提示，而不是把标签页搞崩。
+export const MAX_TRANSFER_BYTES = 256 * 1024 * 1024;
+
+// v1.7.0 #19: pure size validation for a pending transfer. Returns null when
+// acceptable, otherwise a machine-readable reason string.
+// v1.7.0 #19：待传输体积校验纯函数。可接受返回 null，否则返回可读原因。
+export function validateTransferSizes(sizes) {
+	if (!Array.isArray(sizes) || sizes.length === 0) return 'empty';
+	let total = 0;
+	for (const s of sizes) {
+		if (typeof s !== 'number' || !Number.isFinite(s) || s < 0) return 'invalid';
+		total += s;
+		if (total > MAX_TRANSFER_BYTES) return 'too-large';
+	}
+	return null;
+}
+
+// v1.7.0 #19: read one slice of a File/Blob as Uint8Array (memory-friendly:
+// never holds more than one slice at a time). Uses Blob.slice().arrayBuffer()
+// (works in browsers and Node's File impl — no FileReader, no extra copy).
+// v1.7.0 #19：按切片读取 File/Blob 为 Uint8Array（内存友好：任一时刻至多
+// 持有一个切片）。用 Blob.slice().arrayBuffer()（浏览器与 Node 的 File 实现
+// 都支持——不经过 FileReader，无额外拷贝）。
+function readSliceAsUint8(file, offset, length) {
+	return file.slice(offset, offset + length).arrayBuffer().then(ab => new Uint8Array(ab));
+}
+
+// v1.7.0 #19: shared streaming deflater. Feed raw slices via push(); output
+// is split into volumeSize volumes (base64) exactly like the previous
+// whole-buffer implementation — ONE continuous deflate stream, so the wire
+// format is byte-compatible with older clients (receiver unchanged).
+// v1.7.0 #19：共享的流式 deflate 器。通过 push() 喂原始切片；输出按
+// volumeSize 切成分卷（base64），与旧的整缓冲实现完全一致——单条连续
+// deflate 流，线格式与老客户端字节兼容（接收端零改动）。
+class VolumeDeflater {
+	constructor(volumeSize = DEFAULT_VOLUME_SIZE) {
+		this.volumeSize = volumeSize;
+		this.volumes = [];
+		this.compressedSize = 0;
+		this._cur = new Uint8Array(volumeSize);
+		this._curLen = 0;
+		this._deflater = new Deflate({ level: 6, mem: 8 }, (dat) => this._sink(dat));
+	}
+	_sink(bytes) {
+		this.compressedSize += bytes.length;
+		let off = 0;
+		while (off < bytes.length) {
+			const take = Math.min(this.volumeSize - this._curLen, bytes.length - off);
+			this._cur.set(bytes.subarray(off, off + take), this._curLen);
+			this._curLen += take;
+			off += take;
+			if (this._curLen === this.volumeSize) {
+				this.volumes.push(arrayBufferToBase64(this._cur));
+				this._cur = new Uint8Array(this.volumeSize);
+				this._curLen = 0;
+			}
+		}
+	}
+	push(bytes, final = false) {
+		this._deflater.push(bytes, final);
+	}
+	finish() {
+		if (this._curLen > 0) {
+			this.volumes.push(arrayBufferToBase64(this._cur.subarray(0, this._curLen)));
+			this._cur = null;
+			this._curLen = 0;
+		}
+		if (this.volumes.length === 0) {
+			// Deflate of any input (even empty) always emits stream bytes; the
+			// guard keeps the invariant "at least one volume" for receivers.
+			// 任何输入（包括空）的 deflate 都会产出流字节；此守卫维持「至少
+			// 一个分卷」的接收端不变量。
+			this.volumes.push('')
+		}
+		return this.volumes;
+	}
+}
+
+// Named exports for Node-based tests (browser unaffected).
+// 具名导出供 Node 测试使用（浏览器不受影响）。
+export { VolumeDeflater, compressFileToVolumes, compressFilesToArchive };
 
 // v1.1.0 #10: "send original image" opt-out from settings (default off = auto
 // compress + EXIF strip). Read directly to avoid a circular import with
@@ -81,130 +177,92 @@ async function calculateHash(data) {
 
 
 
-// Compress file into volumes with optimized compression
-// 将文件压缩为分卷，优化压缩算法
-async function compressFileToVolumes(file, volumeSize = DEFAULT_VOLUME_SIZE) { // 96KB原始数据，base64后约128KB
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onload = async function(e) {
-			const arrayBuffer = new Uint8Array(e.target.result);
-			
-			try {
-				// Calculate hash of original file for integrity
-				const originalHash = await calculateHash(arrayBuffer);
-				
-				// Use single compression pass with balanced compression
-				// 使用单次压缩，平衡压缩率和速度
-				deflate(arrayBuffer, { 
-					level: 6, // 平衡压缩级别
-					mem: 8    // 合理内存使用
-				}, (err, compressed) => {
-					if (err) {
-						reject(err);
-						return;
-					}
-					
-					// Split compressed data into volumes
-					const volumes = [];
-					for (let i = 0; i < compressed.length; i += volumeSize) {
-						const volume = compressed.slice(i, i + volumeSize);
-						volumes.push(arrayBufferToBase64(volume));
-					}
-					
-					resolve({
-						volumes,
-						originalSize: file.size,
-						compressedSize: compressed.length,
-						originalHash
-					});
-				});
-			} catch (hashError) {
-				reject(hashError);
-			}
-		};
-		reader.onerror = () => reject(reader.error);
-		reader.readAsArrayBuffer(file);
-	});
+// Compress file into volumes (v1.7.0 #19: STREAMING). The file is read in
+// slices; each slice is hashed incrementally and fed to one continuous
+// deflate stream whose output is split into volumes on the fly. Peak memory
+// is now ~1.3x the COMPRESSED size (the volume list) instead of ~3.3x the
+// raw size (raw + compressed + base64 volumes). Wire format unchanged.
+// 将文件压缩为分卷（v1.7.0 #19：流式）。文件按切片读取；每片增量哈希并喂入
+// 单条连续 deflate 流，输出即时切成分卷。峰值内存从原规模的 ~3.3 倍原始
+// 体积（原始+压缩+base64 分卷）降到 ~1.3 倍压缩体积（分卷列表本身）。
+// 线格式不变。
+async function compressFileToVolumes(file, volumeSize = DEFAULT_VOLUME_SIZE) {
+	const hash = sha256.create();
+	const deflater = new VolumeDeflater(volumeSize);
+	const SLICE = 1024 * 1024;
+	for (let off = 0; off < file.size; off += SLICE) {
+		const slice = await readSliceAsUint8(file, off, Math.min(SLICE, file.size - off));
+		hash.update(slice);
+		deflater.push(slice, false);
+	}
+	deflater.push(new Uint8Array(0), true);
+	const volumes = deflater.finish();
+	return {
+		volumes,
+		originalSize: file.size,
+		compressedSize: deflater.compressedSize,
+		originalHash: hash.hex()
+	};
 }
 
 // Compress multiple files into a single archive with volumes
-// 将多个文件压缩为单个分卷归档
-async function compressFilesToArchive(files, volumeSize = DEFAULT_VOLUME_SIZE) {	try {
-		// Create a simple archive format: [file1_size][file1_name_length][file1_name][file1_data][file2_size]...
-		// 创建简单的归档格式
-		const archiveData = [];
+// (v1.7.0 #19: STREAMING — parts are fed to one continuous deflate stream
+// slice-by-slice instead of concatenating everything in RAM first. The
+// archive byte layout is IDENTICAL to the old implementation, so receivers
+// need no change.)
+// 将多个文件压缩为单个分卷归档（v1.7.0 #19：流式——各部件逐片喂入单条连续
+// deflate 流，不再先在内存里拼接全部数据。归档字节布局与旧实现完全一致，
+// 接收端零改动。）
+async function compressFilesToArchive(files, volumeSize = DEFAULT_VOLUME_SIZE) {
+	try {
+		// Simple archive format: [file1_size][file1_name_length][file1_name][file1_data][file2_size]...
+		// 简单归档格式：[name_length(4)][name][size(8)][data]
 		const fileManifest = [];
-		
+		const hash = sha256.create();
+		const deflater = new VolumeDeflater(volumeSize);
+		let rawTotal = 0;
+
+		const emit = async (part) => {
+			rawTotal += part.length;
+			hash.update(part);
+			deflater.push(part, false);
+		};
+
 		for (const file of files) {
-			const fileBuffer = await readFileAsArrayBuffer(file);
 			const nameBytes = new TextEncoder().encode(file.name);
-			
-			// Add file metadata to manifest
+
 			fileManifest.push({
 				name: file.name,
 				size: file.size,
-				offset: 0 // Will be calculated later
+				offset: 0 // unchanged legacy field (never used) / 沿用旧字段（从未使用）
 			});
-			
-			// File format: [name_length(4)][name][size(8)][data]
-			// Use separate arrays to avoid alignment issues
+
 			const nameLengthBytes = new Uint8Array(4);
-			const nameLengthView = new DataView(nameLengthBytes.buffer);
-			nameLengthView.setUint32(0, nameBytes.length, true); // little endian
-			
+			new DataView(nameLengthBytes.buffer).setUint32(0, nameBytes.length, true); // little endian
+
 			const fileSizeBytes = new Uint8Array(8);
-			const fileSizeView = new DataView(fileSizeBytes.buffer);
-			fileSizeView.setBigUint64(0, BigInt(file.size), true); // little endian
-			
-			archiveData.push(
-				nameLengthBytes,
-				nameBytes,
-				fileSizeBytes,
-				new Uint8Array(fileBuffer)
-			);
-		}		
-		// Combine all data
-		const totalLength = archiveData.reduce((sum, part) => sum + part.length, 0);
-		
-		const combinedData = new Uint8Array(totalLength);
-		let offset = 0;
-		
-		for (const part of archiveData) {
-			combinedData.set(part, offset);
-			offset += part.length;
+			new DataView(fileSizeBytes.buffer).setBigUint64(0, BigInt(file.size), true); // little endian
+
+			await emit(nameLengthBytes);
+			await emit(nameBytes);
+			await emit(fileSizeBytes);
+
+			const SLICE = 1024 * 1024;
+			for (let off = 0; off < file.size; off += SLICE) {
+				await emit(await readSliceAsUint8(file, off, Math.min(SLICE, file.size - off)));
+			}
 		}
-		
-		// Calculate hash of the entire archive
-		const archiveHash = await calculateHash(combinedData);
-		
-		// Compress the archive
-		return new Promise((resolve, reject) => {
-			deflate(combinedData, { 
-				level: 6,
-				mem: 8
-			}, (err, compressed) => {
-				if (err) {
-					reject(err);
-					return;
-				}
-				
-				// Split compressed data into volumes
-				const volumes = [];
-				for (let i = 0; i < compressed.length; i += volumeSize) {
-					const volume = compressed.slice(i, i + volumeSize);
-					volumes.push(arrayBufferToBase64(volume));
-				}
-				
-				resolve({
-					volumes,
-					originalSize: totalLength,
-					compressedSize: compressed.length,
-					archiveHash,
-					fileCount: files.length,
-					fileManifest
-				});
-			});
-		});
+
+		deflater.push(new Uint8Array(0), true);
+		const volumes = deflater.finish();
+		return {
+			volumes,
+			originalSize: rawTotal,
+			compressedSize: deflater.compressedSize,
+			archiveHash: hash.hex(),
+			fileCount: files.length,
+			fileManifest
+		};
 	} catch (error) {
 		throw new Error(`Archive compression failed: ${error.message}`);
 	}
@@ -403,7 +461,20 @@ export function setupFileSend({
 // 处理文件上传
 async function handleFilesUpload(files, onSend) {
 	if (!files || files.length === 0) return;
-	
+
+	// v1.7.0 #19: honest sender cap — refuse oversized transfers BEFORE any
+	// memory is committed. Zero server storage means the whole transfer lives
+	// in RAM on both ends; a hard ceiling beats a crashed tab.
+	// v1.7.0 #19：发送端诚实上限——在任何内存分配之前拒绝超限传输。
+	// 服务器零存储意味着整次传输在两端都驻留内存；明确的天花板胜过崩掉的标签页。
+	const bad = validateTransferSizes(Array.from(files).map(f => f.size));
+	if (bad) {
+		if (window.addSystemMsg) {
+			window.addSystemMsg(t('file.too_large', 'Transfer too large — the limit is {limit} per send (everything stays in memory; the server stores nothing).').replace('{limit}', formatFileSize(MAX_TRANSFER_BYTES)), true)
+		}
+		return;
+	}
+
 	const fileId = generateFileId();
 	
 	try {
@@ -739,6 +810,32 @@ function handleFileResumeReq(message) {
 // 处理文件开始消息
 function handleFileStart(message, isPrivate, roomIdx) {
 	const { fileId, fileName, originalSize, compressedSize, totalVolumes, originalHash, archiveHash, fileCount, fileManifest, isArchive, userName } = message;
+
+	// v1.7.0 #19: receiver-side memory guard. The sender declares both sizes
+	// up front; a transfer that would blow the RAM budget is refused before a
+	// single volume arrives (an old client can still SENT it — we just
+	// decline to buffer it). The chat entry still renders, honestly marked.
+	// v1.7.0 #19：接收端内存护栏。发送端在 file_start 就声明两个体积；会
+	// 击穿内存预算的传输在第一个分卷到达前即拒绝（老客户端仍可能发——我们
+	// 只是拒收）。聊天条目照常渲染，并如实标注。
+	if ((typeof compressedSize === 'number' && compressedSize > MAX_TRANSFER_BYTES) ||
+		(typeof originalSize === 'number' && originalSize > MAX_TRANSFER_BYTES)) {
+		if (window.addSystemMsg) {
+			window.addSystemMsg(t('system.file_too_large_incoming', 'Refused "{name}": {size} exceeds this device\'s transfer limit ({limit}).').replace('{name}', fileName || '').replace('{size}', formatFileSize(Math.max(compressedSize || 0, originalSize || 0))).replace('{limit}', formatFileSize(MAX_TRANSFER_BYTES)), true)
+		}
+		if (window.addOtherMsg) {
+			window.addOtherMsg({
+				type: 'file',
+				fileId,
+				fileName: isArchive ? `${fileCount} files` : fileName,
+				originalSize,
+				totalVolumes,
+				userName,
+				refused: true
+			}, userName, userName, false, isPrivate ? 'file_private' : 'file');
+		}
+		return;
+	}
 
 	const fileTransfer = {
 		fileId,

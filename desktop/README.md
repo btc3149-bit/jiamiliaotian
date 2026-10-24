@@ -50,6 +50,43 @@ npx @tauri-apps/cli android dev     # 真机调试
 npx @tauri-apps/cli android build   # 产出 APK/AAB（自动签名用 debug keystore；发布需自建 keystore）
 ```
 
+## Android 正式签名与 Google Play 上架（v1.7.0 #18）
+
+CI 的 `android.yml` 支持**可选**的正式签名：仓库里不持有任何密钥材料，你把自己的上传密钥通过 GitHub Secrets 注入，流水线自动产出 release 签名 APK + Play 上传用 AAB；不配置则保持 debug 签名（仅侧载）。
+
+### 一次性：生成上传密钥（本地，妥善保管，切勿入库）
+
+```bash
+keytool -genkey -v -keystore upload-keystore.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+```
+
+`keytool` 在 JDK / Android Studio（`jbr/bin/keytool`）里。**丢失 keystore = 永久失去该应用的更新权**，务必备份。
+
+### 一次性：配置 GitHub Secrets（仓库 → Settings → Secrets → Actions）
+
+| Secret | 内容 |
+|---|---|
+| `ANDROID_KEY_BASE64` | `base64 -i upload-keystore.jks`（Windows: `certutil -encode upload-keystore.jks keystore.b64` 后取正文） |
+| `ANDROID_KEY_ALIAS` | `upload` |
+| `ANDROID_KEY_PASSWORD` | keytool 时设置的口令 |
+| `ANDROID_VERSION_CODE`（可选） | 正整数；每次上 Play 前递增（不设则用模板默认） |
+
+配好后的下一个 `v*` tag 会额外产出 `jiamiliaotian_<ver>_android.aab`，且三个 APK 改为 release 签名。签名实现 = 官方方案（`gen/android/keystore.properties` + gradle `signingConfigs`，由 `scripts/android-apply-signing.mjs` 在 CI 里对现生成的工程幂等打补丁）。
+
+### Google Play Console 上架清单
+
+1. 开发者账号（一次性 $25，需身份验证）
+2. 创建应用 → 上传 `*.aab`（内部测试轨道先行）
+3. 商店资料：应用名/描述/截图/图标（`desktop/src-tauri/icons/icon-source.png` 可复用）
+4. **隐私政策 URL（必需）**：如实写明——本应用零服务器存储、全部端到端加密、无分析 SDK、无第三方数据收集
+5. 数据安全表单：选择「不收集/不共享任何数据」（与实际架构一致）
+6. 内容分级问卷 → 完成后提交审核
+7. 每次更新：递增 `ANDROID_VERSION_CODE` → 打新 tag
+
+### iOS（诚实边界）
+
+需 Apple 开发者账号（$99/年）+ macOS + Xcode 手动 Archive → Distribute，CI 不做（苹果签名必须在本机钥匙串里走 Xcode）。步骤见上文 iOS 脚手架。
+
 ## iOS
 
 ```bash

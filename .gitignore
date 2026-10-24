@@ -52,3 +52,8 @@ dist/
 新增功能.md
 # esbuild temp bundle from test-ratchet-integration.mjs
 .tmp-nodecrypt.mjs
+
+# Android signing material must never be committed (v1.7.0 #18)
+*.jks
+*.keystore
+keystore.properties
