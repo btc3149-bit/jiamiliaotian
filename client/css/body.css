@@ -269,8 +269,13 @@ body {
 	top: 0;
 	right: 0;
 	bottom: 0;
-	background: rgba(255, 255, 255, 0.5);
-	backdrop-filter: blur(12px);
+	/* v1.9.1: the near-white backdrop made this join-room modal look exactly
+	   like the login page on mobile ("why is there an input box below?").
+	   A clearly darker scrim reads as a modal over the chat. */
+	/* v1.9.1：近白背景让加房弹窗在手机上和登录页一模一样（「下面怎么还有
+	   输入框」）。改深色遮罩，一眼能看出是覆盖在聊天界面上的弹窗。 */
+	background: rgba(15, 25, 35, 0.55);
+	backdrop-filter: blur(6px);
 	z-index: 1;
 }
 

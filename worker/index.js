@@ -62,7 +62,12 @@ export default {
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'no-referrer',
       'X-Frame-Options': 'DENY',
-      'Permissions-Policy': 'camera=(), microphone=(), geolocation=()'
+      // v1.9.1: camera/microphone must be (self) - the previous hardening
+      // ('()') disabled getUserMedia for our own page too, so web calls
+      // always cancelled with "无法访问麦克风/摄像头". geolocation stays off.
+      // v1.9.1：camera/microphone 必须是 (self)——此前加固写成 '()'，把我们
+      // 自己页面的 getUserMedia 也禁了，网页端通话必然取消。地理定位仍禁用。
+      'Permissions-Policy': 'camera=(self), microphone=(self), geolocation=()'
     };
     const secureResponse = new Response(assetResponse.body, assetResponse);
     for (const [k, v] of Object.entries(secureHeaders)) {
