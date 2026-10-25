@@ -58,7 +58,14 @@ export default {
 
     // 注入安全响应头（CSP 为 XSS 纵深防御的最后一道线）
     const secureHeaders = {
-      'Content-Security-Policy': "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' wss:; font-src 'self' data:",
+      // v1.9.3: media-src must allow data: — voice messages render as
+      // <audio src="data:audio/...">; without an explicit media-src the
+      // directive falls back to default-src 'self' and the browser silently
+      // blocks playback (no duration, dead controls).
+      // v1.9.3：media-src 必须放行 data:——语音消息渲染为
+      // <audio src="data:audio/...">；不显式声明 media-src 时继承
+      // default-src 'self'，浏览器静默拦截播放（无时长、控件点不动）。
+      'Content-Security-Policy': "default-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' wss:; font-src 'self' data:",
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'no-referrer',
       'X-Frame-Options': 'DENY',

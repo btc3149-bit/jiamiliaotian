@@ -142,6 +142,19 @@ B.callbacks.onClientCall = (m) => calls.push(m);
 		const n = i18n.split("'" + key + "'").length - 1;
 		check('i18n key ' + key + ' present in both locales', n === 2, 'occurrences=' + n);
 	}
+
+	// v1.9.3: CSP must explicitly allow data: media — voice messages render as
+	// <audio src="data:audio/...">; without media-src the directive falls back
+	// to default-src 'self' and playback is silently blocked on every platform
+	// (web worker header + desktop/APK tauri csp).
+	// v1.9.3：CSP 必须显式放行 data: 媒体——语音消息渲染为
+	// <audio src="data:audio/...">；缺 media-src 时继承 default-src 'self'，
+	// 三端（Worker 头 / 桌面与 APK 的 tauri csp）都会静默拦截播放。
+	const worker = readFileSync('worker/index.js', 'utf8');
+	check('worker CSP has media-src with data:', /media-src[^;"]*'self' data: blob:/.test(worker));
+	const tauri = readFileSync('desktop/src-tauri/tauri.conf.json', 'utf8');
+	check('tauri csp has media-src with data:', /media-src[^;"]*'self' data: blob:/.test(tauri));
+	check('voice audio element uses data: src', call.includes('voice-audio') || readFileSync('client/js/chat.js', 'utf8').includes('voice-audio'));
 }
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : '\n' + failures + ' CHECK(S) FAILED');
