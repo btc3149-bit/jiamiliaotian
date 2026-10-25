@@ -6,16 +6,15 @@ export default defineConfig({
 	// (desktop/Android). Set via the JMLT_DEFAULT_SERVER env at build time
 	// (CI reads the JMLT_DEFAULT_SERVER_URL repository variable). Sanitized
 	// client-side (https only); empty string = same-origin fallback unchanged.
-	// v1.8.1: since the canonical deployment lives at
-	// nodecrypt.btc31415926eth.workers.dev, that URL ships as the built-in
-	// default so released shells work out of the box; the env var still wins.
+	// v1.8.1: shipped nodecrypt.btc31415926eth.workers.dev as the built-in
+	// default. v1.8.2: switched to https://chat.68626.us.ci — workers.dev is
+	// SNI-blocked in some regions; the custom domain resolves directly.
 	// v1.8.0 #20：构建期烤入的默认服务器地址（供桌面/安卓壳零配置开箱）。
-	// 构建时通过 JMLT_DEFAULT_SERVER 环境变量注入（CI 读取仓库变量
-	// JMLT_DEFAULT_SERVER_URL）。客户端侧再消毒（仅 https）；空串 = 同源回退行为不变。
-	// v1.8.1：官方部署位于 nodecrypt.btc31415926eth.workers.dev，将其作为
-	// 内置默认值，发布的壳开箱即用；环境变量仍可覆盖。
+	// 构建时通过 JMLT_DEFAULT_SERVER 环境变量注入。客户端侧再消毒（仅 https）。
+	// v1.8.1 内置 workers.dev 默认值；v1.8.2 换为 chat.68626.us.ci
+	// ——部分地区对 workers.dev 做 SNI 封锁，自定义域可直连。
 	define: {
-		__JMLT_DEFAULT_SERVER__: JSON.stringify(process.env.JMLT_DEFAULT_SERVER || 'https://nodecrypt.btc31415926eth.workers.dev'),
+		__JMLT_DEFAULT_SERVER__: JSON.stringify(process.env.JMLT_DEFAULT_SERVER || 'https://chat.68626.us.ci'),
 	},
 	// Root directory
 	// 根目录
