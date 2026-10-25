@@ -60,6 +60,7 @@ export function createCallManager({ getRoom, addSystem }) {
 	let startedAt = 0;
 	let durationTimer = null;
 	let overlay = null;
+	let hasVideo = false; // negotiated media includes video / 协商媒体含视频
 
 	// ---------- helpers ----------
 	function send(peer, data) {
@@ -77,12 +78,18 @@ export function createCallManager({ getRoom, addSystem }) {
 	function settings() { return readCallSettings(); }
 
 	// ---------- UI ----------
+	// v1.9.2: overlay always renders both <video> elements plus an audio-only
+	// avatar; applyVideoVisibility() shows/hides per negotiated media and the
+	// local stream's tracks.
+	// v1.9.2：浮层恒渲染双 <video> 与纯语音头像；applyVideoVisibility() 按
+	// 协商结果与本地流轨道做显隐。
 	function buildOverlay(mode, name) {
 		removeOverlay();
 		const ov = document.createElement('div');
 		ov.className = 'call-overlay';
 		ov.innerHTML = `
 			<div class="call-panel">
+				<div class="call-remote-avatar">📞</div>
 				<video class="call-remote-video" autoplay playsinline></video>
 				<video class="call-local-video" autoplay playsinline muted></video>
 				<div class="call-info">
@@ -113,18 +120,35 @@ export function createCallManager({ getRoom, addSystem }) {
 			track.enabled = !track.enabled;
 			e.currentTarget.textContent = track.enabled ? '📷' : '🚫';
 		});
+		applyVideoVisibility();
 		return ov;
 	}
 
-	function buildIncomingModal(name) {
+	function applyVideoVisibility() {
+		if (!overlay) return;
+		const ownVid = !!(localStream && localStream.getVideoTracks().length > 0);
+		const rv = overlay.querySelector('.call-remote-video');
+		const lv = overlay.querySelector('.call-local-video');
+		const av = overlay.querySelector('.call-remote-avatar');
+		const cam = overlay.querySelector('[data-call="cam"]');
+		if (rv) rv.style.display = hasVideo ? '' : 'none';
+		if (lv) lv.style.display = ownVid ? '' : 'none';
+		if (av) av.style.display = hasVideo ? 'none' : '';
+		if (cam) cam.style.display = ownVid ? '' : 'none';
+	}
+
+	// v1.9.2: hasVideo selects the icon/text so a voice call never shows the
+	// video-call wording.
+	// v1.9.2：hasVideo 决定图标与文案，语音来电不再显示视频话术。
+	function buildIncomingModal(name, incomingHasVideo) {
 		removeIncomingModal();
 		const ov = document.createElement('div');
 		ov.className = 'call-incoming-overlay';
 		ov.innerHTML = `
 			<div class="call-incoming-card">
-				<div class="call-incoming-icon">📞</div>
+				<div class="call-incoming-icon">${incomingHasVideo ? '🎥' : '📞'}</div>
 				<div class="call-peer">${name.replace(/[<>&]/g, '')}</div>
-				<div class="call-status">${t('call.incoming', 'Incoming call…')}</div>
+				<div class="call-status">${incomingHasVideo ? t('call.incoming_video', 'Incoming video call…') : t('call.incoming_voice', 'Incoming voice call…')}</div>
 				<div class="call-incoming-actions">
 					<button type="button" class="call-ctl call-accept" data-call="accept">✅</button>
 					<button type="button" class="call-ctl call-end" data-call="decline">❌</button>
@@ -194,7 +218,12 @@ export function createCallManager({ getRoom, addSystem }) {
 		return conn;
 	}
 
-	async function getMedia() {
+	// v1.9.2: mode-aware media acquisition — 'audio' never asks for a camera.
+	// v1.9.2：按模式取流——'audio' 完全不请求摄像头。
+	async function getMedia(mode) {
+		if (mode !== 'video') {
+			return await navigator.mediaDevices.getUserMedia({ audio: true });
+		}
 		try {
 			return await navigator.mediaDevices.getUserMedia({ audio: true, video: { width: { ideal: 1280 }, height: { ideal: 720 } } });
 		} catch (_e) {
@@ -209,7 +238,11 @@ export function createCallManager({ getRoom, addSystem }) {
 	}
 
 	// ---------- outgoing ----------
-	async function startOutgoing() {
+	// v1.9.2: mode is 'audio' | 'video' (legacy callers without a mode keep
+	// the previous video behaviour).
+	// v1.9.2：mode 为 'audio' | 'video'（不带参数的旧调用保持原视频行为）。
+	async function startOutgoing(mode) {
+		const isVideo = mode === 'video';
 		const { enabled } = settings();
 		if (!enabled) {
 			sys(t('call.disabled', 'P2P calls are disabled. Enable them in Settings (the peer will see your IP — that is the nature of direct connections).'), true);
@@ -232,11 +265,14 @@ export function createCallManager({ getRoom, addSystem }) {
 		peerId = rd.privateChatTargetId;
 		peerName = rd.privateChatTargetName || peerId;
 		state = 'outgoing';
+		hasVideo = isVideo; // provisional; corrected after getMedia / 预置值，取流后校正
 		buildOverlay('outgoing', peerName);
 		setStatus(t('call.ringing', 'Ringing…'));
-		sys(t('call.calling', 'Calling {name}…').replace('{name}', peerName));
+		sys(t(isVideo ? 'call.calling_video' : 'call.calling_voice', isVideo ? 'Calling {name} (video)…' : 'Calling {name} (voice)…').replace('{name}', peerName));
 		try {
-			localStream = await getMedia();
+			localStream = await getMedia(isVideo ? 'video' : 'audio');
+			hasVideo = localStream.getVideoTracks().length > 0;
+			applyVideoVisibility();
 			attachLocal();
 			pc = createPC();
 			for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
@@ -269,7 +305,12 @@ export function createCallManager({ getRoom, addSystem }) {
 		try {
 			buildOverlay('active', name);
 			setStatus(t('call.connecting', 'Connecting…'));
-			localStream = await getMedia();
+			// hasVideo was derived from the offer SDP — match the caller's
+			// media exactly (video offer → try video, graceful audio fallback).
+			// hasVideo 由 offer SDP 推得——与呼叫方媒体精确匹配（视频 offer
+			// 才请求摄像头，失败自动降级纯语音）。
+			localStream = await getMedia(hasVideo ? 'video' : 'audio');
+			applyVideoVisibility();
 			attachLocal();
 			pc = createPC();
 			for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
@@ -296,16 +337,30 @@ export function createCallManager({ getRoom, addSystem }) {
 	async function handleSignal(msg) {
 		if (!msg || !msg.clientId) return;
 		const rd = getRoom();
-		const fromPrivateTarget = rd && msg.clientId === rd.privateChatTargetId;
 		const clean = sanitizeCallSignal(msg.d);
 		if (!clean) return; // malformed → drop silently / 非法载荷静默丢弃
-		// Only the current private-chat partner may call us (1v1 scope guard).
-		// 只有当前私聊对象可以来电（一对一作用域守卫）。
-		if (!fromPrivateTarget) {
-			if (clean.t === 'offer') send(msg.clientId, { t: 'decline' });
-			return;
-		}
+		// v1.9.2: any fully-handshaked room member may call — the incoming
+		// popup IS the consent gate. The old "must be the current private-chat
+		// target" guard silently declined calls whenever the callee had not
+		// opened that exact private chat, which made calls flaky ("sometimes
+		// the peer never sees the incoming screen"). Non-offer signals still
+		// only count from the established call peer below.
+		// v1.9.2：房间内任意已完成握手的成员均可来电——来电弹窗本身就是同意
+		// 门槛。旧守卫要求「必须是当前私聊对象」，对方没打开对应私聊就被静默
+		// 拒接，表现为「时通时不通/收不到来电」。非 offer 信令仍只认已建立的
+		// 通话对端。
 		if (clean.t === 'offer') {
+			const sender = rd && rd.chat && rd.chat.channel && rd.chat.channel[msg.clientId];
+			if (!sender || !sender.shared) {
+				send(msg.clientId, { t: 'decline' });
+				return;
+			}
+			// the callee's own P2P opt-in still gates incoming calls
+			// 接收方自己的 P2P 开关仍是来电门槛
+			if (!settings().enabled) {
+				send(msg.clientId, { t: 'decline' });
+				return;
+			}
 			if (state !== 'idle') {
 				// busy: auto-decline, never stack calls / 忙线自动拒接，不叠通话
 				send(msg.clientId, { t: 'decline' });
@@ -314,10 +369,13 @@ export function createCallManager({ getRoom, addSystem }) {
 			}
 			peerId = msg.clientId;
 			peerName = (rd.userMap[msg.clientId] && (rd.userMap[msg.clientId].userName || rd.userMap[msg.clientId].username)) || msg.clientId;
+			// media type comes from the offer SDP itself — no extra wire field
+			// 媒体类型直接从 offer SDP 判定——不新增线上字段
+			hasVideo = typeof clean.sdp === 'string' && clean.sdp.indexOf('m=video') !== -1;
 			state = 'incoming';
 			pendingOffer = clean;
-			buildIncomingModal(peerName);
-			sys(t('call.incoming_sys', '📞 Incoming call from {name}.').replace('{name}', peerName));
+			buildIncomingModal(peerName, hasVideo);
+			sys(t(hasVideo ? 'call.incoming_sys_video' : 'call.incoming_sys_voice', hasVideo ? '🎥 Video call from {name}.' : '📞 Voice call from {name}.').replace('{name}', peerName));
 			// auto-decline after the ring timeout / 响铃超时自动拒接
 			ringTimer = setTimeout(() => {
 				if (state === 'incoming') {
@@ -384,6 +442,7 @@ export function createCallManager({ getRoom, addSystem }) {
 		}
 		remoteStream = null;
 		pendingOffer = null;
+		hasVideo = false;
 		iceQueue = [];
 		peerId = null;
 		peerName = '';

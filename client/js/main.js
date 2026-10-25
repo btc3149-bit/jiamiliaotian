@@ -262,10 +262,14 @@ let callManager = null;
 window.__jmltOnCallSignal = (r) => { if (callManager) callManager.handleSignal(r) };
 window.__jmltOnCallPeerLeft = (clientId) => { if (callManager) callManager.handlePeerLeft(clientId) };
 window.__jmltUpdateCallBtn = () => {
-	const btn = document.querySelector('.chat-call-btn');
-	if (!btn) return;
-	const rd = roomsData[activeRoomIndex];
-	btn.style.display = (rd && rd.privateChatTargetId) ? '' : 'none';
+	// v1.9.2: two call buttons — 📞 voice / 🎥 video — both gated on having a
+	// private-chat target. / 双通话按钮，均以私聊对象为可见前提。
+	for (const sel of ['.chat-call-btn', '.chat-video-btn']) {
+		const btn = document.querySelector(sel);
+		if (!btn) continue;
+		const rd = roomsData[activeRoomIndex];
+		btn.style.display = (rd && rd.privateChatTargetId) ? '' : 'none';
+	}
 };
 
 // 当 DOM 内容加载完成后执行初始化逻辑
@@ -387,15 +391,20 @@ window.addEventListener('DOMContentLoaded', () => {
 	}
 	// v1.5.0 #16: call manager + composer 📞 button (visible only with a
 	// private-chat target; the button itself does the settings gate check).
+	// v1.9.2: 📞 = voice call, 🎥 = video call.
 	// v1.5.0 #16：通话管理器 + 输入区 📞 按钮（仅私聊对象时可见；
-	// 设置开关的校验在 startOutgoing 内做）。
+	// 设置开关的校验在 startOutgoing 内做）。v1.9.2：📞=语音通话、🎥=视频通话。
 	callManager = createCallManager({
 		getRoom: () => roomsData[activeRoomIndex],
 		addSystem: (text, warn) => addSystemMsg(text, warn)
 	});
 	const callBtn = document.querySelector('.chat-call-btn');
 	if (callBtn) {
-		callBtn.addEventListener('click', () => callManager.startOutgoing());
+		callBtn.addEventListener('click', () => callManager.startOutgoing('audio'));
+	}
+	const videoCallBtn = document.querySelector('.chat-video-btn');
+	if (videoCallBtn) {
+		videoCallBtn.addEventListener('click', () => callManager.startOutgoing('video'));
 	}
 	setupMoreBtnMenu();
 	// P1-C: give util.push.js read access to the live room list (injected to

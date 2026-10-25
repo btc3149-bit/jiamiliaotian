@@ -3131,6 +3131,39 @@ html[data-mode="dark"] .call-incoming-card {
 	background: #10151e;
 }
 
+/* ==================== v1.9.2 call buttons + audio-only overlay ==================== */
+/* v1.9.2 通话按钮（📞语音 / 🎥视频）与纯语音浮层头像 */
+.chat-call-btn, .chat-video-btn {
+	border: none;
+	background: transparent;
+	cursor: pointer;
+	font-size: 16px;
+	line-height: 1;
+	padding: 4px 6px;
+	border-radius: 8px;
+	color: #808080;
+	align-self: center;
+}
+.chat-call-btn:hover, .chat-video-btn:hover {
+	background: rgba(0, 0, 0, .06);
+}
+.call-remote-avatar {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 64px;
+	color: #9fb6d8;
+	pointer-events: none;
+}
+html[data-mode="dark"] .chat-call-btn, html[data-mode="dark"] .chat-video-btn {
+	color: #aaa;
+}
+html[data-mode="dark"] .chat-call-btn:hover, html[data-mode="dark"] .chat-video-btn:hover {
+	background: rgba(255, 255, 255, .08);
+}
+
 /* ==================== v1.9.0 file preview overlay / 文件预览浮层 ==================== */
 .jmlt-file-preview-overlay {
 	position: fixed; inset: 0; background: rgba(0,0,0,.75);
