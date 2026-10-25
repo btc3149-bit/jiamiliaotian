@@ -47,6 +47,7 @@ Tauri 2 同一代码库可出 Android/iOS。**注意：移动端构建无法在 
 - 优先级：`?server=` 参数 > 应用内手动设置 > **烤入默认** > 同源——烤入值永远可被手动覆盖，不是锁定
 - 它是仓库**变量（Variables）不是 secret**：地址会编译进分发的二进制里，本来就不是秘密
 - 不设置该变量时，行为与旧版完全一致（手动填 / 同源）
+- v1.8.1 起，官方部署 `https://nodecrypt.btc31415926eth.workers.dev` 作为代码级内置默认（`vite.config.js`）；设置 `JMLT_DEFAULT_SERVER_URL` 变量或本地 `JMLT_DEFAULT_SERVER` 环境变量即可覆盖
 
 ## Android
 
