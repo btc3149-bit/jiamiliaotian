@@ -198,5 +198,26 @@ check('rejects hash fragments', sanitizeBakedServerUrl('https://example.com/#roo
 check('rejects userinfo / credentials', sanitizeBakedServerUrl('https://user:pass@example.com') === '');
 check('rejects garbage / empty / non-string', sanitizeBakedServerUrl('not a url') === '' && sanitizeBakedServerUrl('') === '' && sanitizeBakedServerUrl(null) === '' && sanitizeBakedServerUrl(42) === '');
 
+
+console.log('=== test-protocol: v1.8.3 CSP inline-handler regression ===');
+// The worker serves script-src 'self' (no unsafe-inline): inline onclick
+// attribute handlers are silently refused by the browser. Regression guard:
+// no client template may emit inline event-handler attributes.
+import { readFileSync } from 'node:fs';
+const CSP_GUARD_FILES = ['client/js/chat.js', 'client/js/ui.js', 'client/js/util.settings.js', 'client/js/util.file.js', 'client/js/util.fileUpload.js', 'client/js/main.js'];
+let cspClean = true;
+for (const f of CSP_GUARD_FILES) {
+  const src = readFileSync(new URL('./' + f, import.meta.url), 'utf-8');
+  const m = src.match(/\son(click|change|submit|load|input|error)=/);
+  if (m) { cspClean = false; console.log('  inline handler in', f, ':', m[0]); }
+}
+check('no inline event-handler attributes in client templates', cspClean);
+// download button must be plain button + delegated (data-file-id present)
+const chatSrc = readFileSync(new URL('./client/js/chat.js', import.meta.url), 'utf-8');
+check('download button has no inline onclick', !chatSrc.includes('onclick='));
+check('download button keeps data-file-id for delegation', chatSrc.includes('data-file-id=') && chatSrc.includes('file-download-btn'));
+const mainSrc = readFileSync(new URL('./client/js/main.js', import.meta.url), 'utf-8');
+check('delegated download listener exists in main.js', mainSrc.includes("closest('.file-download-btn')") && mainSrc.includes('downloadFile(fileId)'));
+
 console.log(`\ntest-protocol: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

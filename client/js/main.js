@@ -179,6 +179,26 @@ window.notifyMessage = notifyMessage;
 window.setupEmojiPicker = setupEmojiPicker;
 window.handleFileMessage = handleFileMessage;
 window.downloadFile = downloadFile;
+
+// v1.8.3 CSP fix: the deployed worker sets script-src 'self' (no
+// 'unsafe-inline'), so inline event-handler ATTRIBUTES are REFUSED by
+// the browser — the file download button in chat.js was dead on the Cloudflare
+// deployment ("click download, nothing happens"). The button template no
+// longer carries an inline handler; clicking is handled here via delegation
+// (survives re-renders, works for every current and future message).
+// v1.8.3 CSP 修复：部署端 CSP 为 script-src 'self'（无 'unsafe-inline'），
+// 内联事件处理器属性会被浏览器拒绝执行——Cloudflare 部署上文件下载按钮
+// 完全无响应（「点下载没反应」）。按钮模板不再带内联 handler，改在这里
+// 用事件委托统一处理（重渲染不受影响，对所有消息生效）。
+document.addEventListener('click', (e) => {
+	const btn = e.target && e.target.closest ? e.target.closest('.file-download-btn') : null;
+	if (!btn) return;
+	const wrap = btn.closest('[data-file-id]');
+	const fileId = wrap ? wrap.getAttribute('data-file-id') : '';
+	if (!fileId) return;
+	e.preventDefault();
+	downloadFile(fileId);
+});
 // v1.3.0 #6/#7: settings panel lives in util.settings.js which cannot import
 // the renderers without a cycle — expose hooks instead.
 // v1.3.0 #6/#7：设置面板在 util.settings.js，直接导入渲染器会成环——改挂钩子。

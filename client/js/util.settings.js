@@ -764,6 +764,19 @@ function setupSettingsPanel() {
 	const serverUrlSaveBtn = $('#settings-server-url-save', settingsContent);
 	on(serverUrlSaveBtn, 'click', () => {
 		const raw = (serverUrlInput ? serverUrlInput.value : '').trim();
+		// v1.8.3: reloads drop the in-memory session (credentials never touch
+		// disk by RULES), so the user lands back on the login page. Only
+		// reload when the value ACTUALLY changed — clicking "apply" with an
+		// unchanged value used to look like a random logout.
+		// v1.8.3：刷新会丢掉内存态会话（凭据按 RULES 永不落盘），用户会被
+		// 踢回登录页。因此只在值真正变化时才刷新——值没变时点「应用」
+		// 之前表现得像莫名掉登录。
+		let storedRaw = '';
+		try { storedRaw = localStorage.getItem('jmlt_server_url') || ''; } catch (_e) { /* ignore */ }
+		if (raw === storedRaw) {
+			window.addSystemMsg && window.addSystemMsg(t('settings.server_url_unchanged', 'Server URL unchanged — settings are saved automatically, nothing to reload.'), true);
+			return
+		}
 		if (raw === '') {
 			try { localStorage.removeItem('jmlt_server_url'); } catch (_e) { /* ignore */ }
 			window.location.reload();
