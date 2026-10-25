@@ -1,6 +1,9 @@
 import { generateClientId, encryptMessage, decryptMessage, logEvent, isString, isObject, getTime } from './utils.js';
 import { sendWebPush, isAcceptableEndpoint } from './push.js';
 
+// Durable Object classes must be exported from the entrypoint for wrangler.
+export { VapidStore } from './vapid.js';
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
