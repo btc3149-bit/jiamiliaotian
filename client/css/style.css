@@ -3130,3 +3130,43 @@ html[data-mode="dark"] .applock-overlay {
 html[data-mode="dark"] .call-incoming-card {
 	background: #10151e;
 }
+
+/* ==================== v1.9.0 file preview overlay / 文件预览浮层 ==================== */
+.jmlt-file-preview-overlay {
+	position: fixed; inset: 0; background: rgba(0,0,0,.75);
+	z-index: 3000; display: flex; align-items: center; justify-content: center;
+	padding: 16px;
+}
+.jmlt-file-preview-card {
+	background: #fff; border-radius: 12px; max-width: min(92vw, 720px);
+	max-height: 88vh; display: flex; flex-direction: column; overflow: hidden;
+	box-shadow: 0 8px 40px rgba(0,0,0,.4);
+}
+.jmlt-file-preview-header {
+	display: flex; align-items: center; justify-content: space-between; gap: 12px;
+	padding: 10px 14px; border-bottom: 1px solid #eee;
+}
+.jmlt-file-preview-name { font-weight: 600; word-break: break-all; font-size: 14px; }
+.jmlt-file-preview-close {
+	background: none; border: none; font-size: 22px; line-height: 1;
+	cursor: pointer; color: #666; padding: 2px 6px;
+}
+.jmlt-file-preview-img {
+	max-width: 100%; max-height: 68vh; object-fit: contain;
+	display: block; background: #111;
+}
+.jmlt-file-preview-generic { padding: 40px 24px; text-align: center; font-size: 15px; color: #555; }
+.jmlt-file-preview-actions {
+	display: flex; gap: 10px; padding: 10px 14px;
+	border-top: 1px solid #eee; justify-content: flex-end;
+}
+.jmlt-file-preview-save, .jmlt-file-preview-close2 {
+	padding: 8px 16px; border-radius: 8px; border: none;
+	background: #357ae8; color: #fff; font-size: 14px; cursor: pointer;
+}
+.jmlt-file-preview-save:disabled { opacity: .6; }
+.jmlt-file-preview-close2 { background: #e8e8e8; color: #333; }
+html[data-mode="dark"] .jmlt-file-preview-card { background: #2a2a2a; color: #eee; }
+html[data-mode="dark"] .jmlt-file-preview-header { border-bottom-color: #444; }
+html[data-mode="dark"] .jmlt-file-preview-actions { border-top-color: #444; }
+html[data-mode="dark"] .jmlt-file-preview-close2 { background: #3c3c3c; color: #ddd; }

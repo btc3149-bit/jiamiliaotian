@@ -160,6 +160,18 @@
 	.flip-card {
 	width: 95%;
 }
+
+	/* v1.9.0: login page must fill the viewport on phones. Previously it was
+	   content-height only, so on some WebViews the (hidden) app container or
+	   stale content could appear stacked below it. */
+	/* v1.9.0：登录页在手机上必须占满视口。此前只有内容高度，部分 WebView
+	   上（被隐藏的）主容器或残留内容会堆叠在登录页下方。 */
+	.login-container {
+		min-height: 100dvh;
+		justify-content: center;
+		box-sizing: border-box;
+		padding: 24px 12px;
+	}
 }
 
 .member.private-chat-active {

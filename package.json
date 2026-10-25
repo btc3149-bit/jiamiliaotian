@@ -1,6 +1,6 @@
 {
   "name": "jiamiliaotian",
-  "version": "1.8.3",
+  "version": "1.9.0",
   "description": "端到端加密房间",
   "main": "worker/index.js",
   "scripts": {

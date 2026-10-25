@@ -91,6 +91,9 @@ jobs:
         working-directory: desktop/src-tauri
         run: cargo tauri android init
 
+      - name: Apply shell capabilities (media permissions)
+        run: python3 scripts/android-apply-shell.py desktop/src-tauri/gen/android
+
       - name: Apply release signing when keystore secrets are present
         id: sign
         env:
@@ -207,6 +210,9 @@ jobs:
       - name: Init Android project (generated in CI, not committed)
         working-directory: desktop/src-tauri
         run: cargo tauri android init
+
+      - name: Apply shell capabilities (media permissions)
+        run: python3 scripts/android-apply-shell.py desktop/src-tauri/gen/android
 
       - name: Apply release signing (required for AAB)
         id: sign

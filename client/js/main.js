@@ -7,7 +7,8 @@ import './NodeCrypt.js';
 import {
 	setupFileSend,
 	handleFileMessage,
-	downloadFile
+	downloadFile,
+	previewFile
 } from './util.file.js';
 
 // P2: 拖拽文件直投上传模态框 / Drop files straight into the upload modal
@@ -198,6 +199,26 @@ document.addEventListener('click', (e) => {
 	if (!fileId) return;
 	e.preventDefault();
 	downloadFile(fileId);
+});
+
+// v1.9.0: tapping the file entry itself (icon / name / meta) opens the
+// in-app preview overlay for received files — the only way to VIEW an image
+// inside the APK shell (Android WebView cannot download blob: URLs, so the
+// old flow had no way to show a received image at all).
+// v1.9.0：点击文件条目本体（图标/名称/大小）打开应用内预览浮层——这是
+// APK 壳里查看图片的唯一途径（安卓 WebView 无法下载 blob: URL，旧流程
+// 完全没有查看已收图片的手段）。
+document.addEventListener('click', (e) => {
+	if (e.target && e.target.closest && e.target.closest('.file-download-btn')) return;
+	const info = e.target && e.target.closest ? e.target.closest('.file-message .file-info') : null;
+	if (!info) return;
+	const wrap = info.closest('[data-file-id]');
+	const fileId = wrap ? wrap.getAttribute('data-file-id') : '';
+	if (!fileId) return;
+	const transfer = window.fileTransfers && window.fileTransfers.get(fileId);
+	if (!transfer || transfer.isArchive || !transfer.volumeData || !transfer.volumeData.length) return;
+	e.preventDefault();
+	previewFile(fileId);
 });
 // v1.3.0 #6/#7: settings panel lives in util.settings.js which cannot import
 // the renderers without a cycle — expose hooks instead.

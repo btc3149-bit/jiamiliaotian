@@ -946,7 +946,7 @@ function handleFileComplete(message) {
 export async function downloadFile(fileId) {
 	const transfer = window.fileTransfers.get(fileId);
 	if (!transfer || transfer.status !== 'completed') return;
-	
+
 	try {
 		if (transfer.isArchive) {
 			// Download archive as multiple files
@@ -961,6 +961,167 @@ export async function downloadFile(fileId) {
 		console.error('Download error:', error);
 		window.addSystemMsg(`Failed to download: ${error.message}`);
 	}
+}
+
+// ==================== v1.9.0: in-app preview + universal save ====================
+// Android WebView (the Tauri APK shell) cannot download blob: URLs at all —
+// wry sets no DownloadListener and DownloadManager cannot fetch in-memory
+// blobs. Received files therefore get an in-app preview overlay (tap the file
+// entry), and saving goes through a capability chain:
+//   1. Web Share API with files  -> system share sheet ("save to gallery /
+//      files" on Android; also the ONLY path that works inside the APK shell
+//      if the WebView exposes it)
+//   2. <a download> anchor       -> real browsers / desktop WebView2
+// ==================== v1.9.0：应用内预览 + 通用保存 ====================
+// 安卓 WebView（Tauri APK 壳）完全无法下载 blob: URL——wry 没设置
+// DownloadListener，DownloadManager 也拿不到内存 blob。因此接收方可以点
+// 文件条目打开应用内预览浮层；保存走能力链：
+//   1. Web Share（带文件）-> 系统分享面板（安卓可「保存到相册/文件」）
+//   2. <a download> 锚点  -> 真浏览器 / 桌面 WebView2
+
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|avif)$/i;
+
+export function isImageFileName(name) {
+	return IMAGE_EXT_RE.test(String(name || ''));
+}
+
+function guessMime(name) {
+	const n = String(name || '').toLowerCase();
+	const m = [
+		[/\.png$/, 'image/png'], [/\.jpe?g$/, 'image/jpeg'], [/\.gif$/, 'image/gif'],
+		[/\.webp$/, 'image/webp'], [/\.bmp$/, 'image/bmp'], [/\.avif$/, 'image/avif'],
+		[/\.svg$/, 'image/svg+xml'], [/\.mp4$/, 'video/mp4'], [/\.webm$/, 'video/webm'],
+		[/\.mp3$/, 'audio/mpeg'], [/\.ogg$/, 'audio/ogg'], [/\.wav$/, 'audio/wav'],
+		[/\.pdf$/, 'application/pdf'], [/\.txt$/, 'text/plain'],
+		[/\.zip$/, 'application/zip'], [/\.json$/, 'application/json']
+	];
+	for (const [re, mime] of m) if (re.test(n)) return mime;
+	return 'application/octet-stream';
+}
+
+// Decompress a completed single-file transfer into a Blob (hash-verified).
+// 将已完成的单文件传输解压为 Blob（带哈希校验）。
+export async function getTransferBlob(fileId) {
+	const transfer = window.fileTransfers.get(fileId);
+	if (!transfer || transfer.status !== 'completed') return null;
+	if (transfer.isArchive || !transfer.volumeData || !transfer.volumeData.length) return null;
+
+	const combined = transfer.volumeData.map((v) => base64ToArrayBuffer(v));
+	const totalLength = combined.reduce((sum, arr) => sum + arr.length, 0);
+	const compressed = new Uint8Array(totalLength);
+	let offset = 0;
+	for (const data of combined) {
+		compressed.set(data, offset);
+		offset += data.length;
+	}
+	const decompressed = await new Promise((resolve, reject) => {
+		inflate(compressed, (err, out) => (err ? reject(err) : resolve(out)));
+	});
+	if (transfer.originalHash) {
+		const calculated = await calculateHash(decompressed);
+		if (calculated !== transfer.originalHash) {
+			throw new Error('File integrity check failed: hash mismatch');
+		}
+	}
+	return new Blob([decompressed], { type: guessMime(transfer.fileName) });
+}
+
+// Save a Blob through the capability chain. Resolves to the method used, or
+// 'none' if the environment exposes no usable path (caller shows a hint).
+// 通过能力链保存 Blob。返回实际使用的方式；'none' 表示环境无可用路径。
+export async function saveBlobAuto(blob, fileName) {
+	const file = blob instanceof File ? blob : new File([blob], fileName || 'file', { type: blob.type || 'application/octet-stream' });
+	// 1) Web Share with files (Android share sheet has "save to files/gallery")
+	try {
+		if (navigator.canShare && navigator.canShare({ files: [file] })) {
+			await navigator.share({ files: [file], title: fileName });
+			return 'share';
+		}
+	} catch (err) {
+		if (err && err.name === 'AbortError') return 'share'; // user closed the sheet
+		// fall through to anchor
+	}
+	// 2) Anchor download (browsers; desktop WebView2 handles this too)
+	if (typeof document !== 'undefined') {
+		const url = URL.createObjectURL(blob);
+		try {
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = fileName || 'file';
+			document.body.appendChild(a);
+			a.click();
+			document.body.removeChild(a);
+			// Don't revoke instantly — some WebViews start the download async.
+			setTimeout(() => URL.revokeObjectURL(url), 60000);
+			return 'download';
+		} catch (_err) {
+			URL.revokeObjectURL(url);
+		}
+	}
+	return 'none';
+}
+
+// In-app fullscreen preview overlay for a received file (images render
+// inline; everything else shows a save card). Pure DOM, no dependencies.
+// 接收文件的应用内全屏预览浮层（图片内联渲染；其余显示保存卡片）。
+export async function previewFile(fileId) {
+	const transfer = window.fileTransfers.get(fileId);
+	if (!transfer) return;
+	let overlay = null;
+	try {
+		const blob = await getTransferBlob(fileId);
+		if (!blob) {
+			window.addSystemMsg && window.addSystemMsg(t('file.preview_unavailable', 'Preview unavailable — the transfer is not complete or has no data.'), true);
+			return;
+		}
+		const url = URL.createObjectURL(blob);
+		const isImg = isImageFileName(transfer.fileName);
+		overlay = document.createElement('div');
+		overlay.className = 'jmlt-file-preview-overlay';
+		overlay.innerHTML = `
+			<div class="jmlt-file-preview-card">
+				<div class="jmlt-file-preview-header">
+					<span class="jmlt-file-preview-name">${escapeHTMLFileName(transfer.fileName)}</span>
+					<button type="button" class="jmlt-file-preview-close" aria-label="close">&times;</button>
+				</div>
+				${isImg
+					? `<img class="jmlt-file-preview-img" alt="${escapeHTMLFileName(transfer.fileName)}" src="${url}">`
+					: `<div class="jmlt-file-preview-generic"><div class="file-icon">📄</div><div>${escapeHTMLFileName(transfer.fileName)}</div></div>`}
+				<div class="jmlt-file-preview-actions">
+					<button type="button" class="jmlt-file-preview-save">⬇ ${t('file.save', 'Save')}</button>
+					<button type="button" class="jmlt-file-preview-close2">${t('action.close', 'Close')}</button>
+				</div>
+			</div>`;
+		document.body.appendChild(overlay);
+		const close = () => {
+			overlay.remove();
+			setTimeout(() => URL.revokeObjectURL(url), 60000);
+		};
+		overlay.addEventListener('click', (e) => {
+			if (e.target === overlay || e.target.closest('.jmlt-file-preview-close') || e.target.closest('.jmlt-file-preview-close2')) close();
+		});
+		const saveBtn = overlay.querySelector('.jmlt-file-preview-save');
+		saveBtn.addEventListener('click', async () => {
+			saveBtn.disabled = true;
+			try {
+				const how = await saveBlobAuto(blob, transfer.fileName);
+				if (how === 'none') {
+					window.addSystemMsg && window.addSystemMsg(t('file.save_unsupported', 'This app environment cannot save files — long-press the preview image instead.'), true);
+				}
+			} catch (err) {
+				window.addSystemMsg && window.addSystemMsg('Save failed: ' + (err && err.message || err), true);
+			} finally {
+				saveBtn.disabled = false;
+			}
+		});
+	} catch (error) {
+		window.addSystemMsg && window.addSystemMsg('Preview failed: ' + (error && error.message || error), true);
+		if (overlay) overlay.remove();
+	}
+}
+
+function escapeHTMLFileName(name) {
+	return String(name || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // Format file size
