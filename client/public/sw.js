@@ -18,6 +18,7 @@ const SHELL_CACHE = `${VERSION}-shell`;
 const SHARE_CACHE = 'jmlt-share-v1';
 const SHARE_TTL_MS = 5 * 60 * 1000;
 
+/* eslint-disable-next-line no-unused-vars -- extracted and unit-tested by test-share-sw.mjs (vm sandbox) */
 function isSharePayloadFresh(payload, now) {
 	if (!payload || typeof payload.ts !== 'number' || !Number.isFinite(payload.ts)) return false;
 	const age = now - payload.ts;

@@ -47,15 +47,45 @@
 | Web Push 接口（/api/vapid 等） | ✅ | ❌ Node 未实现 /api/vapid 与推送转发：订阅请求经加密通道上报后被静默忽略（无报错、无通知），不是订阅成功但不达 |
 | 已读回执 / 断线补拉 | ✅ | ✅（协议层通用） |
 | 安全响应头（CSP 等） | ✅ | ✅ 已对齐（CSP/Permissions-Policy 等五头与 Workers 逐项一致） |
+| 静态资源压缩 | ✅ Cloudflare 平台自动压缩（gzip/Brotli） | ⚠️ 方式不同：镜像内 nginx 已开 `gzip on`（js/css/html/svg/字体等类型）；无 Brotli。效果同为压缩传输，但算法集合与平台路径不完全一致 |
+| 健康检查端点 | ❌ 无（平台自有探活） | ✅ Node 中继提供 `GET /healthz`（仅回 200 + `ok`，不带任何业务元数据），镜像 HEALTHCHECK 与 compose 探活均查此端点；任一进程（node/nginx）崩溃容器即退出，不再假健康 |
 | TLS / HSTS | ✅ Cloudflare 边缘 | ⚠️ 镜像仅 HTTP 80，TLS 与 HSTS 由前置反代负责（见下方声明） |
 | 房间分片 / 水平扩展 | ✅ 按 DO 分片 | ❌ 单进程 |
 | 服务器密钥轮换 / 迁移签名 | ✅ 24h 轮换 + 48h 旧钥迁移签名 | ❌ Node 无 24h 轮换与迁移签名：进程启动时生成 RSA 密钥、重启即换钥，已 pin 的客户端会触发密钥不符并断连，须按提示确认重置 pin 后重连；重启 Node 服务 = 全员需重新确认服务器密钥 |
 | 频道名校验 | ✅ 强制房间名 SHA-256 哈希格式 | ✅ 已对齐（均强制房间名 SHA-256 哈希格式） |
 | 过期连接清理 | ✅ 清理时摘频道并广播 | ✅ 已对齐（清理时摘频道并广播，成员列表不含已离线成员） |
+| 扇出背压 | ⚠️ Worker 无 bufferedAmount 标准接口：仅做大帧扇出分批让行（每 8 个收件人让行一次事件循环），不丢帧不断连 | ✅ 查 bufferedAmount：持续超 8MB 阈值 20s 的连接丢弃非关键帧（频道扇出/成员列表），仍不排空则以 1013 断开（客户端退避重连 + 同伴重播兜底） |
 
 > **Docker 部署的 TLS 声明**：Docker 镜像仅提供明文 HTTP（80 端口）。生产环境务必在前面加 TLS 终结反向代理（如 Caddy / Nginx / Cloudflare Tunnel），并由该层做 HTTP→HTTPS 跳转与下发 `Strict-Transport-Security: max-age=31536000; includeSubDomains`；不要直接把 80 端口暴露到公网明文使用。
 
 > **关于 Worker 名称**：`wrangler.toml` 中 `name = "nodecrypt"` 是有意保留的——更改 Worker 名称会切换 Durable Object 命名空间，导致所有房间的服务器 RSA 密钥重置，已 pin 密钥的现有用户会被锁在房间外。如确需改名，请提前通知所有成员清空浏览器中 `nodecrypt_server_key:*` 前缀的 localStorage 键。
+
+### Docker 部署（自托管）
+
+```bash
+docker build -t jiamiliaotian . && docker run -d --name jiamiliaotian -p 80:80 jiamiliaotian
+```
+
+或使用仓库自带的最小 compose 配置：
+
+```bash
+docker compose up -d --build
+```
+
+访问 http://localhost:80 。镜像运行时为 Node.js 22（node:22-alpine 基座），内含 nginx（静态文件 + WebSocket 代理，已开 gzip）与 Node 中继两个进程，由启动脚本统一监管：任一进程崩溃，容器随之退出并由重启策略/探活接管。健康检查端点为 Node 中继的 `GET http://127.0.0.1:8088/healthz`（容器内地址，只回 `ok`）。生产环境请按上方 TLS 声明在前面加反代；compose 文件中已留反代占位注释（默认不启动）。本项目不默认内置任何第三方 STUN/TURN：通话功能默认关闭，如需使用请在客户端设置里填你自己的 STUN/TURN 地址。
+
+### 环境变量
+
+| 变量 | 用在哪 | 默认值 | 说明 |
+|---|---|---|---|
+| `HOST` | Node 中继（server/server.js） | `127.0.0.1` | 中继监听地址。Docker 镜像内由同容器 nginx 代理到回环地址，保持默认即可；注意反代后来源 IP 恒为代理 IP（见 server.js 内注释） |
+| `PORT` | Node 中继（server/server.js） | `8088` | 中继监听端口（WebSocket + `/healthz`） |
+| `JMLT_DEFAULT_SERVER` | 构建期（vite.config.js） | `https://chat.68626.us.ci` | 构建时烤入客户端的默认服务器地址（桌面/安卓壳开箱连接用）；仅接受 https，客户端侧会再消毒 |
+| `JMLT_DEFAULT_SERVER_URL` | GitHub Actions 仓库变量 | — | 桌面/安卓 workflow 构建时注入为 `JMLT_DEFAULT_SERVER`，与上一行含义相同、只是变量名不同 |
+| `ANDROID_KEY_BASE64` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD` | GitHub Actions secrets（android.yml） | — | 安卓 release 签名 keystore；未配置则出 debug 签名 APK。管线默认不持有任何密钥材料 |
+| `ANDROID_VERSION_CODE` | GitHub Actions secret（android.yml） | — | 可选，覆盖安卓 versionCode；签名脚本内对应 `VERSION_CODE`（scripts/android-apply-signing.mjs） |
+
+样例文件见仓库根目录 `.env.example`（复制为 `.env` 后修改；`.env` 已被 git 忽略）。
 
 ## 📝 项目简介
 

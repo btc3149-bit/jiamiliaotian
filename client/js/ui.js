@@ -22,6 +22,7 @@ import {
 import {
 	t
 } from './util.i18n.js';
+import { callBridge, hasBridge } from './util.bridge.js';
 import {
 	updateChatInputStyle
 } from './chat.js';
@@ -77,13 +78,13 @@ function validateRoomData(roomData) {
 // 复制文本到剪贴板（含降级处理）
 function copyToClipboard(text, successMessage = t('action.copied', 'Copied to clipboard!'), errorPrefix = t('action.copy_failed', 'Copy failed, url:')) {
 	if (!text) {
-		window.addSystemMsg && window.addSystemMsg(t('action.nothing_to_copy', 'Nothing to copy'));
+		callBridge('addSystemMsg', t('action.nothing_to_copy', 'Nothing to copy'));
 		return;
 	}
 
 	if (navigator.clipboard && navigator.clipboard.writeText) {
 		navigator.clipboard.writeText(text).then(() => {
-			window.addSystemMsg && window.addSystemMsg(successMessage);
+			callBridge('addSystemMsg', successMessage);
 		}).catch((error) => {
 			console.error('Clipboard write failed:', error);
 			showFallbackCopy(text, errorPrefix);
@@ -100,7 +101,7 @@ function showFallbackCopy(text, prefix) {
 		prompt(prefix, text);
 	} else {
 		// For environments where prompt is not available
-		window.addSystemMsg && window.addSystemMsg(t('action.copy_not_supported', 'Copy not supported in this environment'));
+		callBridge('addSystemMsg', t('action.copy_not_supported', 'Copy not supported in this environment'));
 	}
 }
 
@@ -120,7 +121,7 @@ function executeMenuAction(action, closeMenuCallback) {
 		}
 	} catch (error) {
 		console.error('Menu action failed:', error);
-		window.addSystemMsg && window.addSystemMsg(t('action.action_failed', 'Action failed. Please try again.'));
+		callBridge('addSystemMsg', t('action.action_failed', 'Action failed. Please try again.'));
 	} finally {
 		closeMenuCallback && closeMenuCallback();
 	}
@@ -131,7 +132,7 @@ function executeMenuAction(action, closeMenuCallback) {
 function handleShareAction() {
 	const validation = validateRoomData(roomsData[activeRoomIndex]);
 	if (!validation.valid) {
-		window.addSystemMsg && window.addSystemMsg(`${t('action.cannot_share', 'Cannot share:')} ${validation.error}`);
+		callBridge('addSystemMsg', `${t('action.cannot_share', 'Cannot share:')} ${validation.error}`);
 		return;
 	}
 
@@ -462,11 +463,11 @@ export function setupMoreBtnMenu() {
 		}
 	});
 
-	menu.addEventListener('animationend', function(e) {
+	menu.addEventListener('animationend', function() {
 		animating = false;
 	});
 
-	menu.addEventListener('transitionend', function(e) {
+	menu.addEventListener('transitionend', function() {
 		animating = false;
 	});
 }
@@ -480,7 +481,7 @@ export function preventSpaceInput(input) {
 			e.preventDefault()
 		}
 	});
-	input.addEventListener('input', function(e) {
+	input.addEventListener('input', function() {
 		input.value = input.value.replace(/[\s\p{P}\p{S}]/gu, function(match) {
 			return match === "'" ? "'" : ''
 		})
@@ -536,7 +537,7 @@ export function loginFormHandler(modal) {
 			btn.disabled = true;
 			btn.innerText = t('ui.connecting', 'Connecting...')
 		}
-		window.joinRoom(userName, roomName, password, modal, function(success) {
+		callBridge('joinRoom', userName, roomName, password, modal, function(success) {
 			if (!success && btn) {
 				btn.disabled = false;
 				btn.innerText = 'ENTER'
@@ -621,8 +622,8 @@ export function autofillRoomPwd(formPrefix = '') {
 		isPlaintext = true;
 		
 		// Show security warning for plaintext URLs
-		if (window.addSystemMsg) {
-			window.addSystemMsg(t('system.security_warning', '⚠️ This link uses an old format. Room data is not encrypted.'), true);
+		if (hasBridge('addSystemMsg')) {
+			callBridge('addSystemMsg', t('system.security_warning', '⚠️ This link uses an old format. Room data is not encrypted.'), true);
 		}
 	}
 		// Fill in the form fields

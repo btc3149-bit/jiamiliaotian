@@ -1228,6 +1228,24 @@ flex-direction: column;
 	transform: translateY(-2px);
 }
 
+/* #26: manual release entry for a completed received transfer */
+.file-release-btn {
+	margin-left: 6px;
+	padding: 2px 8px;
+	font-size: 11px;
+	color: #888;
+	background: transparent;
+	border: 1px solid #ccc;
+	border-radius: 10px;
+	cursor: pointer;
+	align-self: center;
+}
+
+.file-release-btn:hover {
+	color: #555;
+	border-color: #999;
+}
+
 .file-download-btn:active {
 	transform: translateY(0);
 }
@@ -3248,6 +3266,14 @@ html[data-mode="dark"] .chat-call-btn:hover, html[data-mode="dark"] .chat-video-
 	display: block; background: #111;
 }
 .jmlt-file-preview-generic { padding: 40px 24px; text-align: center; font-size: 15px; color: #555; }
+.jmlt-file-preview-media { width: 100%; max-height: 68vh; display: block; background: #111; }
+.jmlt-file-preview-audio { width: 100%; display: block; padding: 24px 16px; box-sizing: border-box; }
+.jmlt-file-preview-pdf { width: min(92vw, 720px); height: 68vh; border: 0; display: block; background: #fff; }
+.jmlt-file-preview-text {
+	margin: 0; padding: 14px 16px; overflow: auto; max-height: 68vh;
+	white-space: pre-wrap; word-break: break-word; font-size: 13px;
+	line-height: 1.5; text-align: left; font-family: ui-monospace, Menlo, Consolas, monospace;
+}
 .jmlt-file-preview-actions {
 	display: flex; gap: 10px; padding: 10px 14px;
 	border-top: 1px solid #eee; justify-content: flex-end;

@@ -3,7 +3,9 @@
 //
 // SECURITY / RULES.md 对照：
 // - 载荷 = { v, n:房间名, p:房间密码, u:用户名?, ts }，用「迁移专用随机密钥」
-//   AES-256-GCM 加密（PBKDF2-SHA256 200k，salt 域分离 'jmlt-migrate:v1:'）。
+//   AES-256-GCM 加密（PBKDF2-SHA256，salt 域分离 'jmlt-migrate:v1:'）。
+// - 迭代次数随容器版本字节：v1 = 200k（历史），v2 = 600k（OWASP 现行口径，
+//   不变量 3「只可上调不可下调」）。解密按版本字节选参数，旧容器照常可解。
 // - QR 内容是一个 URL 片段（#jmlt=...）——fragment 永远不会发给服务器，
 //   手机原生相机扫码 → 直接打开本应用 → 自动填入登录表单。
 // - 有效期 10 分钟：payload 内嵌时间戳，解密端强制校验，过期拒绝。
@@ -16,7 +18,10 @@
 import { t } from './util.i18n.js';
 
 export const MIGRATION_MAGIC = 'JMLTK';       // 5-byte ASCII magic
-export const MIGRATION_VERSION = 1;
+export const MIGRATION_VERSION = 2;            // current container version (PBKDF2 600k)
+export const MIGRATION_LEGACY_VERSION = 1;     // legacy container version (PBKDF2 200k)
+export const MIGRATION_ITERATIONS = 600000;
+export const MIGRATION_LEGACY_ITERATIONS = 200000;
 export const MIGRATION_TTL_MS = 10 * 60 * 1000; // QR/file valid for 10 minutes
 export const MIGRATION_KEY_MIN_LEN = 12; // migration key: min 12 Unicode code points (export side only)
 
@@ -48,7 +53,7 @@ function asciiBytes(s) {
 	return out;
 }
 
-async function deriveMigrationKey(keyString, salt) {
+async function deriveMigrationKey(keyString, salt, iterations = MIGRATION_ITERATIONS) {
 	const enc = new TextEncoder();
 	const baseKey = await crypto.subtle.importKey(
 		'raw', enc.encode(String(keyString)), 'PBKDF2', false, ['deriveKey']);
@@ -57,7 +62,7 @@ async function deriveMigrationKey(keyString, salt) {
 	// 域分离 salt：同一个密钥字符串派生不出其他格式（加密存档用独立域）可用的钥匙。
 	const saltBytes = concatBytes(asciiBytes('jmlt-migrate:v1:'), salt);
 	return crypto.subtle.deriveKey(
-		{ name: 'PBKDF2', salt: saltBytes, iterations: 200000, hash: 'SHA-256' },
+		{ name: 'PBKDF2', salt: saltBytes, iterations, hash: 'SHA-256' },
 		baseKey,
 		{ name: 'AES-GCM', length: 256 },
 		false,
@@ -120,12 +125,20 @@ export async function decryptMigration(bytes, keyString, nowMs = Date.now()) {
 	}
 	const magic = String.fromCharCode(...bytes.slice(0, MIGRATION_MAGIC.length));
 	if (magic !== MIGRATION_MAGIC) throw new Error('bad-format');
-	if (bytes[MIGRATION_MAGIC.length] !== MIGRATION_VERSION) throw new Error('bad-format');
+	// Iteration count is selected by the container version byte: v1
+	// containers were written at 200k and must keep decrypting; v2 uses
+	// 600k. Anything else is not a container we understand.
+	// 迭代次数由容器版本字节决定：v1 容器按 200k 写成、必须仍可解；v2 为 600k。
+	const containerVersion = bytes[MIGRATION_MAGIC.length];
+	let iterations;
+	if (containerVersion === MIGRATION_VERSION) iterations = MIGRATION_ITERATIONS;
+	else if (containerVersion === MIGRATION_LEGACY_VERSION) iterations = MIGRATION_LEGACY_ITERATIONS;
+	else throw new Error('bad-format');
 	let off = MIGRATION_MAGIC.length + 1;
 	const salt = bytes.slice(off, off + 16); off += 16;
 	const iv = bytes.slice(off, off + 12); off += 12;
 	const ct = bytes.slice(off);
-	const aesKey = await deriveMigrationKey(keyString, salt);
+	const aesKey = await deriveMigrationKey(keyString, salt, iterations);
 	let plain;
 	try {
 		plain = new Uint8Array(await crypto.subtle.decrypt(

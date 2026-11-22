@@ -11,11 +11,8 @@ import {
 	toggleReactionLocal,
 	renderReactions,
 	updateTypingIndicator,
-	saveDraft,
 	loadDraft,
-	clearDraft,
 	recallMessageLocal,
-	burnMessageLocal,
 	applyEditLocal,
 	armBurnTimer,
 	queueReadReceipt,
@@ -23,7 +20,8 @@ import {
 	markMessageReadDom
 } from './chat.js';
 import { reportPushSubscription } from './util.push.js';
-import { selectReplayable, dedupeReplayBatch, isValidReactionEmoji } from './util.validate.js';
+import { callBridge, hasBridge } from './util.bridge.js';
+import { selectReplayable, dedupeReplayBatch, SyncReplyGate, syncReplyDelayMs, isValidReactionEmoji } from './util.validate.js';
 // v1.2.0 #11: offline send queue flush
 import { flushSendQueue } from './util.sendQueue.js';
 // v1.3.0 #6: local-only room metadata (alias/group/pinned)
@@ -284,9 +282,24 @@ export function joinRoom(userName, roomName, password, modal = null, onResult) {
 		onClientDelete: (r) => handleClientDelete(idx, r),
 		onClientReadReceipt: (r) => handleClientReadReceipt(idx, r),
 		onClientSync: (r) => handleClientSync(idx, r),
+		onClientSyncDone: (r) => handleClientSyncDone(idx, r),
+		onChannelFrameTooLarge: (info) => {
+			// #16: explicit oversize notice (was a silent send failure).
+			const approx = info && info.limitBytes >= 1024 * 1024
+				? (info.limitBytes / (1024 * 1024)).toFixed(1) + ' MB'
+				: Math.max(1, Math.round((info ? info.limitBytes : 0) / 1024)) + ' KB';
+			addSystemMsg(t('file.room_too_large', 'This room is too large for file sending right now -- the per-file limit at the current member count is about {limit}. Text messages are unaffected.').replace('{limit}', approx), true);
+		},
 		onClientReplay: (r) => handleClientReplay(idx, r),
 		onClientStatus: (r) => handleClientStatus(idx, r),
-		onClientCall: (r) => { if (window.__jmltOnCallSignal) window.__jmltOnCallSignal(r) }
+		onClientCall: (r) => { callBridge('onCallSignal', r) },
+		// TOFU pin could not be persisted (private browsing / storage off):
+		// warn once in-room instead of silently re-trusting every reconnect.
+		onPinPersistFailed: () => {
+			try {
+				addSystemMsg(t('security.pin_persist_failed', 'The server key pin could not be saved on this device, so it is valid for this session only.'));
+			} catch (_e) { /* room UI may not be ready yet */ }
+		}
 	};
 	const chatInst = new window.NodeCrypt(window.config, callbacks);
 	roomsData[idx].chat = chatInst;
@@ -355,6 +368,17 @@ export function handleClientList(idx, list, selfId) {
 			try {
 				rd.chat.sendSyncRequest(since, knownIds);
 			} catch (_e) { /* sync is best-effort */ }
+			// #30: fallback second request -- if no peer answered within 6s
+			// (e.g. every responder was suppressed or the only holder was
+			// slow), ask once more. Responders treat it as a fresh episode.
+			rd._syncSatisfied = false;
+			rd._syncDoneSent = false;
+			if (rd._syncRetryTimer) clearTimeout(rd._syncRetryTimer);
+			rd._syncRetryTimer = setTimeout(() => {
+				rd._syncRetryTimer = null;
+				if (rd._syncSatisfied || !rd.chat || typeof rd.chat.sendSyncRequest !== 'function') return;
+				try { rd.chat.sendSyncRequest(since, knownIds); } catch (_e) { /* best-effort */ }
+			}, 6000);
 		}
 	}
 	// v1.2.0 #11: second flush point — by now E2EE to peers is negotiated, so
@@ -450,8 +474,8 @@ export function handleClientSecured(idx, user) {
 			text: msg
 		});
 		if (activeRoomIndex === idx) addSystemMsg(msg, true);
-		if (window.notifyMessage) {
-			window.notifyMessage(rd.roomName, 'system', msg, '', rd.chat && rd.chat.credentials ? rd.chat.credentials.channel : '')
+		if (hasBridge('notifyMessage')) {
+			callBridge('notifyMessage', rd.roomName, 'system', msg, '', rd.chat && rd.chat.credentials ? rd.chat.credentials.channel : '')
 		}
 	}
 }
@@ -483,9 +507,7 @@ export function handleClientLeft(idx, clientId) {
 	if (rd.statusMap) delete rd.statusMap[clientId];
 	// v1.5.0 #16: if the departing member was on a call with us, end it.
 	// v1.5.0 #16：离开成员若是通话对端，立即结束通话。
-	if (window.__jmltOnCallPeerLeft) {
-		try { window.__jmltOnCallPeerLeft(clientId) } catch (_e) { /* best-effort */ }
-	}
+	try { callBridge('onCallPeerLeft', clientId) } catch (_e) { /* best-effort */ }
 	clearTypingUser(idx, clientId); // P2: don't let a departed member's typing state linger
 	if (activeRoomIndex === idx) {
 		renderUserList(false);
@@ -570,10 +592,39 @@ export function handleClientSync(idx, r) {
 	const known = new Set(Array.isArray(r.ids) ? r.ids : []);
 	// R5: selection/sanitization now lives in the pure, unit-tested helper.
 	const out = selectReplayable(rd.messages, since, known, rd.myUserName || '');
-	if (out.length > 0) {
+	if (out.length === 0) return;
+	// #30: delayed + suppressible response. The requester broadcasts 'sd'
+	// (sync-done) once it has a batch; pending responders then suppress
+	// their duplicate replay. A sole holder hears no 'sd' (nobody else had
+	// anything), so its reply still goes out after the delay -- never
+	// suppressed to death. A fresh request starts a new episode, so the
+	// requester's fallback re-request is not blocked by a stale 'sd'.
+	rd._syncGate = rd._syncGate || new SyncReplyGate();
+	rd._syncTimers = rd._syncTimers || {};
+	const gate = rd._syncGate;
+	if (rd._syncTimers[r.clientId]) return; // already pending for this peer
+	gate.resetEpisode(r.clientId);
+	if (!gate.noteRequest(r.clientId)) return;
+	rd._syncTimers[r.clientId] = setTimeout(() => {
+		delete rd._syncTimers[r.clientId];
+		const send = gate.shouldSend(r.clientId);
+		gate.noteSettled(r.clientId);
+		if (!send) return; // suppressed: requester already got a batch
 		try {
 			rd.chat.sendSyncReplay(r.clientId, out);
 		} catch (_e) { /* replay is best-effort */ }
+	}, syncReplyDelayMs());
+}
+
+// #30: a peer announced it already received a replay batch -- suppress our
+// pending reply to that peer (clear its timer + mark the gate).
+export function handleClientSyncDone(idx, r) {
+	const rd = roomsData[idx];
+	if (!rd || !r || !r.clientId || r.clientId === rd.myId) return;
+	if (rd._syncGate) rd._syncGate.noteSyncDone(r.clientId);
+	if (rd._syncTimers && rd._syncTimers[r.clientId]) {
+		clearTimeout(rd._syncTimers[r.clientId]);
+		delete rd._syncTimers[r.clientId];
 	}
 }
 
@@ -619,6 +670,14 @@ export function handleClientReplay(idx, r) {
 			ttl: entry.ttl
 		});
 	}
+	// #30: this sync episode is satisfied -- cancel the fallback re-request
+	// and tell other peers to suppress their pending duplicate replays.
+	rd._syncSatisfied = true;
+	if (rd._syncRetryTimer) { clearTimeout(rd._syncRetryTimer); rd._syncRetryTimer = null; }
+	if (!rd._syncDoneSent && rd.chat && typeof rd.chat.sendSyncDone === 'function') {
+		rd._syncDoneSent = true;
+		try { rd.chat.sendSyncDone(); } catch (_e) { /* best-effort */ }
+	}
 	const msg = `${batch.length} ${t('system.sync_done', 'missed message(s) restored from peers')}`;
 	rd.messages.push({ type: 'system', text: msg });
 	if (activeRoomIndex === idx) {
@@ -646,8 +705,8 @@ export function handleClientMessage(idx, msg) {
 		// v1.2.0 #17：续传请求必须送达发送端，与当前激活房间无关（载荷只有
 		// fileId + 分卷下标，无内容）。
 		if (msgType === 'file_resume_req') {
-			if (window.handleFileMessage) {
-				window.handleFileMessage(msg.data, false, idx)
+			if (hasBridge('handleFileMessage')) {
+				callBridge('handleFileMessage', msg.data, false, idx)
 			}
 			return;
 		}
@@ -678,8 +737,8 @@ export function handleClientMessage(idx, msg) {
 			}
 
 			const notificationMsgType = msgType.includes('_private') ? 'private file' : 'file';
-			if (window.notifyMessage && msg.data && msg.data.fileName) {
-				window.notifyMessage(newRd.roomName, notificationMsgType, `${msg.data.fileName}`, realUserName, newRd.chat && newRd.chat.credentials ? newRd.chat.credentials.channel : '');
+			if (hasBridge('notifyMessage') && msg.data && msg.data.fileName) {
+				callBridge('notifyMessage', newRd.roomName, notificationMsgType, `${msg.data.fileName}`, realUserName, newRd.chat && newRd.chat.credentials ? newRd.chat.credentials.channel : '');
 			}
 		}
 
@@ -687,8 +746,8 @@ export function handleClientMessage(idx, msg) {
 		if (activeRoomIndex === idx) {
 			// If it's the active room, delegate to util.file.js to handle UI and file transfer state.
 			// This applies to all file-related messages (file_start, file_volume, file_end, etc.)
-			if (window.handleFileMessage) {
-				window.handleFileMessage(msg.data, msgType.includes('_private'), idx);
+			if (hasBridge('handleFileMessage')) {
+				callBridge('handleFileMessage', msg.data, msgType.includes('_private'), idx);
 			}
 		} else {
 			// If it's not the active room, only increment unread count for 'file_start' messages.
@@ -765,8 +824,8 @@ export function handleClientMessage(idx, msg) {
 
 	// Only add message to chat display if it's for the active room
 	if (activeRoomIndex === idx) {
-		if (window.addOtherMsg) {
-			window.addOtherMsg(msg.data, realUserName, realUserName, false, msgType, null, {
+		if (hasBridge('addOtherMsg')) {
+			callBridge('addOtherMsg', msg.data, realUserName, realUserName, false, msgType, null, {
 				id: msg.id || null,
 				mentions: Array.isArray(msg.mentions) ? msg.mentions : [],
 				mentionsMe: mentionsMe,
@@ -780,12 +839,12 @@ export function handleClientMessage(idx, msg) {
 	}
 
 	const notificationMsgType = msgType.includes('_private') ? `private ${msgType.split('_')[0]}` : msgType;
-	if (window.notifyMessage) {
+	if (hasBridge('notifyMessage')) {
 		// A direct @mention gets its own, more intrusive notification
 		if (mentionsMe) {
-			window.notifyMessage(newRd.roomName, 'mention', msg.data, realUserName, newRd.chat && newRd.chat.credentials ? newRd.chat.credentials.channel : '');
+			callBridge('notifyMessage', newRd.roomName, 'mention', msg.data, realUserName, newRd.chat && newRd.chat.credentials ? newRd.chat.credentials.channel : '');
 		} else {
-			window.notifyMessage(newRd.roomName, notificationMsgType, msg.data, realUserName, newRd.chat && newRd.chat.credentials ? newRd.chat.credentials.channel : '');
+			callBridge('notifyMessage', newRd.roomName, notificationMsgType, msg.data, realUserName, newRd.chat && newRd.chat.credentials ? newRd.chat.credentials.channel : '');
 		}
 	}
 }
