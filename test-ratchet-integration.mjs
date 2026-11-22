@@ -201,5 +201,56 @@ console.log('=== integration: rekey handshake ===');
 	check('non-initiator cannot initiate rekey', responder.initiateRekey(initId) === false);
 }
 
+// ---- 5. E-5: degenerate (all-zero) Curve25519 shared-secret rejection ----
+// deriveSharedHex is a NodeCrypt instance method (unit-testable surface).
+// Known low-order / non-canonical u encodings below are written in the
+// big-endian hex wire format this codebase uses (elliptic getPublic('hex')):
+// byte-reversals of the canonical little-endian X25519 blacklist entries
+// (u = 0, u = p-1, u = p, and the p-5 / 2^256-39 family), each verified to
+// yield an all-zero shared secret or to throw inside derive — both must
+// surface as null from the helper, every time.
+// E-5：退化（全零）共享秘密拒绝。下列低阶/非规范 u 编码为本仓大端 hex
+// 线格式（小端黑名单逐字节反转），均已验证恒使共享秘密全零或派生抛错，
+// 辅助函数必须恒返回 null。
+console.log('=== integration: E-5 low-order rejection ===');
+{
+	const probe = makeInstance('probe');
+	const LOW_ORDER_PUBS = [
+		'00'.repeat(32), // u = 0
+		'7f' + 'ff'.repeat(30) + 'ec', // u = p - 1
+		'7f' + 'ff'.repeat(30) + 'ed', // u = p (non-canonical, ≡ 0)
+		'7f' + 'ff'.repeat(30) + 'cd', // byte-reversed blacklist entry (p - 32 family)
+		'ff'.repeat(31) + 'd9' // byte-reversed blacklist entry (2^256 - 39 family)
+	];
+	for (const badPub of LOW_ORDER_PUBS) {
+		let allNull = true;
+		for (let i = 0; i < 5; i++) {
+			if (probe.deriveSharedHex(ec.genKeyPair(), badPub) !== null) allNull = false;
+		}
+		check(`low-order pub rejected (${badPub.slice(0, 10)}…)`, allNull);
+	}
+	check('all-zero pub rejected', probe.deriveSharedHex(ec.genKeyPair(), '00'.repeat(32)) === null);
+	check('garbage pub rejected', probe.deriveSharedHex(ec.genKeyPair(), 'not-hex') === null);
+	// honest peers: helper output is byte-identical to the historical inline
+	// expression and symmetric on both sides
+	const kpA = ec.genKeyPair(), kpB = ec.genKeyPair();
+	const legacy = (mine, theirsPub) =>
+		mine.derive(ec.keyFromPublic(theirsPub, 'hex').getPublic()).toString('hex').padEnd(64, '8').substr(0, 64);
+	const hA = probe.deriveSharedHex(kpA, kpB.getPublic('hex'));
+	const hB = probe.deriveSharedHex(kpB, kpA.getPublic('hex'));
+	check('honest derive matches legacy expression', hA === legacy(kpA, kpB.getPublic('hex')));
+	check('honest derive symmetric and non-null', hA !== null && hA === hB);
+	// real 'c' handshake path: an all-zero peer pub must leave shared unset
+	// and must not produce the 'u' username message
+	const carol = makeInstance('carol');
+	const carolOut = [];
+	stubTransport(carol, carolOut);
+	await carol.onMessage({ data: carol.encryptServerMessage(
+		{ a: 'c', p: '00'.repeat(32), c: 'clientZ' }, carol.serverShared) });
+	check('zero-pub handshake: shared stays unset',
+		!!carol.channel['clientZ'] && carol.channel['clientZ'].shared === null);
+	check('zero-pub handshake: no u message sent', carolOut.length === 1);
+}
+
 console.log(`\ntest-ratchet-integration: ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
