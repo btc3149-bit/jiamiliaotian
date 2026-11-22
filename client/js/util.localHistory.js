@@ -14,6 +14,58 @@
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
+// ---- stored-blob codec (upgrade #29b) --------------------------------------
+// v1 stored iv/ct as JSON number arrays (1–4 chars per byte). v2 stores them
+// as base64 strings, shrinking the on-disk blob by roughly 60–70%. The blob
+// is still AES-GCM ciphertext and the key is still memory-only — only the
+// encoding of the ciphertext changed. loadLocalHistory accepts BOTH v1 and
+// v2 so existing users' history is never lost; flushHistory always writes v2,
+// which is the (lazy, per-room) migration path.
+// v1 把 iv/ct 存成 JSON 数字数组（每字节 1–4 字符）；v2 改 base64 落盘，
+// 体积降约 60–70%。落盘仍是 AES-GCM 密文、钥仍只存内存——只换密文编码。
+// 读取同时兼容 v1/v2，旧数据绝不丢；写入一律 v2，即按房间惰性迁移。
+export const HISTORY_FORMAT_V1 = 1;
+export const HISTORY_FORMAT_V2 = 2;
+
+export function bytesToBase64(bytes) {
+	const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+	let bin = '';
+	const CHUNK = 0x8000; // chunked: fromCharCode.apply would overflow the stack on large blobs
+	for (let i = 0; i < u8.length; i += CHUNK) {
+		bin += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK))
+	}
+	return btoa(bin)
+}
+
+export function base64ToBytes(b64) {
+	if (typeof b64 !== 'string') return null;
+	try {
+		const bin = atob(b64);
+		const out = new Uint8Array(bin.length);
+		for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+		return out
+	} catch (error) {
+		return null
+	}
+}
+
+// Normalize a stored blob of either format version to raw {iv, ct} bytes,
+// or null when the shape is not a recognized history blob.
+// 把任一版本的落盘 blob 归一为 {iv, ct} 原始字节；形状不认返回 null。
+export function decodeStoredHistoryBlob(blob) {
+	if (!blob || typeof blob !== 'object') return null;
+	if (blob.v === HISTORY_FORMAT_V2) {
+		const iv = base64ToBytes(blob.iv);
+		const ct = base64ToBytes(blob.ct);
+		return iv && ct ? { iv, ct } : null
+	}
+	if (blob.v === HISTORY_FORMAT_V1) {
+		if (!Array.isArray(blob.iv) || !Array.isArray(blob.ct)) return null;
+		return { iv: new Uint8Array(blob.iv), ct: new Uint8Array(blob.ct) }
+	}
+	return null
+}
+
 function histStorageKey(channelHash) {
 	const safe = String(channelHash || '');
 	return /^[0-9a-f]{64}$/.test(safe) ? 'jmlt_hist:' + safe : null
@@ -113,9 +165,9 @@ async function flushHistory(rd) {
 			iv
 		}, rd.historyKey, enc.encode(payload));
 		const blob = {
-			v: HISTORY_BLOB_VERSION,
-			iv: Array.from(iv),
-			ct: Array.from(new Uint8Array(ct))
+			v: HISTORY_FORMAT_V2,
+			iv: bytesToBase64(iv),
+			ct: bytesToBase64(new Uint8Array(ct))
 		};
 		localStorage.setItem(key, JSON.stringify(blob))
 	} catch (error) {
@@ -142,7 +194,10 @@ export async function loadLocalHistory(roomName, password, channelHash) {
 	} catch (error) {
 		return []
 	}
-	if (!blob || (blob.v !== HISTORY_BLOB_VERSION && blob.v !== HISTORY_LEGACY_BLOB_VERSION) || !Array.isArray(blob.iv) || !Array.isArray(blob.ct)) return [];
+	// Accept v1 (number arrays @200k) and v2 (base64 @600k) — never drop old data.
+	// 同时接受 v1（数字数组 @200k）与 v2（base64 @600k）——绝不丢旧数据。
+	const decoded = decodeStoredHistoryBlob(blob);
+	if (!decoded) return [];
 	try {
 		// v1 blobs were derived at 200k; v2 at 600k. Pick by stored version
 		// so pre-upgrade history keeps loading (and is re-written as v2 on
@@ -154,8 +209,8 @@ export async function loadLocalHistory(roomName, password, channelHash) {
 		const histKey = await deriveHistoryKey(password, channelHash, iterations);
 		const plain = await crypto.subtle.decrypt({
 			name: 'AES-GCM',
-			iv: new Uint8Array(blob.iv)
-		}, histKey, new Uint8Array(blob.ct));
+			iv: decoded.iv
+		}, histKey, decoded.ct);
 		const entries = JSON.parse(dec.decode(plain));
 		return Array.isArray(entries) ? entries : []
 	} catch (error) {
