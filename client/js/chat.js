@@ -5,12 +5,10 @@ import {
 } from './util.avatar.js';
 import {
 	roomsData,
-	activeRoomIndex,
-	switchRoom
+	activeRoomIndex
 } from './room.js';
 import {
 	announceLive,
-	searchMessagesAcrossRooms,
 	readerNames,
 	focusIntoModal,
 	restoreModalFocus,
@@ -52,7 +50,15 @@ import { callBridge } from './util.bridge.js';
 // Item 20: full emoji picker for reactions (lazy) + single-grapheme validation
 import { createFullEmojiPicker, notifyEmojiLoadFailed } from './util.emoji.js';
 import { isValidReactionEmoji } from './util.validate.js';
-
+// Item 27: message-list DOM windowing (pure helpers; data array untouched)
+import {
+	initialWindowStart,
+	expandWindowStart,
+	hasEarlierMessages,
+	shouldExpandWindow,
+	windowStartForIndex,
+	clampWindowStart
+} from './util.msgWindow.js';
 // v1.2.0 #9: render a validated voice payload as an inline audio player.
 // data: URL is escaped and javascript: stripped (same treatment as images).
 // v1.2.0 #9：把校验过的语音载荷渲染为内嵌音频播放器。data: URL 转义并剥
@@ -80,6 +86,57 @@ export function scrollChatToBottom(chatArea) {
 	chatArea.scrollTop = chatArea.scrollHeight;
 }
 
+// Item 27: DOM windowing state — index into the active room's rd.messages
+// of the first rendered message. Only the DOM is windowed; rd.messages
+// itself is never trimmed (peer replay + local search read it directly).
+// 第 27 条：DOM 窗口状态——当前房间 rd.messages 中第一条已渲染消息的
+// 下标。只裁 DOM 不裁数据（同伴重播与本地搜索直接读 rd.messages）。
+let msgWindowStart = 0;
+let msgWindowExpanding = false;
+
+function renderOneMessage(m) {
+	const meta = { id: m.id, reactions: m.reactions, mentions: m.mentions, mentionsMe: m.mentionsMe, quote: m.quote, ttl: m.ttl, edited: m.edited, deleted: m.deleted, burned: m.burned, read: m.read, readBy: m.readBy };
+	if (m.type === 'me') addMsg(m.text, true, m.msgType || 'text', m.timestamp, meta);
+	else if (m.type === 'system') addSystemMsg(m.text, true, m.timestamp);
+	else addOtherMsg(m.text, m.userName, m.avatar, true, m.msgType || 'text', m.timestamp, meta)
+}
+
+// Render rd.messages[msgWindowStart..] — the same per-message code path a
+// full render always used, just bounded to the current window.
+// 渲染 rd.messages[msgWindowStart..]——与全量渲染完全相同的逐条路径，
+// 只是限定在当前窗口内。
+function renderMessageSlice(rd) {
+	const chatArea = $id('chat-area');
+	if (!chatArea || !rd) return;
+	chatArea.innerHTML = '';
+	msgWindowStart = clampWindowStart(msgWindowStart, rd.messages.length);
+	for (let i = msgWindowStart; i < rd.messages.length; i++) renderOneMessage(rd.messages[i])
+}
+
+// Expand the window one page towards older messages, keeping the
+// previously visible content stationary (all growth happens above it).
+// 向更早方向扩一页，并保持原可见内容位置不动（新增内容全在上方）。
+function expandMessageWindow() {
+	const chatArea = $id('chat-area');
+	const rd = roomsData[activeRoomIndex];
+	if (!chatArea || !rd || !hasEarlierMessages(msgWindowStart)) return;
+	msgWindowExpanding = true;
+	const prevHeight = chatArea.scrollHeight;
+	const prevTop = chatArea.scrollTop;
+	msgWindowStart = expandWindowStart(msgWindowStart);
+	renderMessageSlice(rd);
+	chatArea.scrollTop = prevTop + Math.max(0, chatArea.scrollHeight - prevHeight);
+	msgWindowExpanding = false
+}
+
+function ensureMsgWindowScrollHook(chatArea) {
+	if (chatArea.dataset.msgWindowHook === '1') return;
+	chatArea.dataset.msgWindowHook = '1';
+	on(chatArea, 'scroll', () => {
+		if (msgWindowExpanding) return;
+		if (shouldExpandWindow(chatArea.scrollTop, msgWindowStart)) expandMessageWindow()
+	}, { passive: true })}
+
 // Render the chat area
 // 渲染聊天区域
 export function renderChatArea() {
@@ -91,8 +148,11 @@ export function renderChatArea() {
 	exitSelectMode();
 	if (activeRoomIndex < 0 || !roomsData[activeRoomIndex]) {
 		chatArea.innerHTML = '';
+		msgWindowStart = 0;
 		return
 	}
+	ensureMsgWindowScrollHook(chatArea);
+	const rd = roomsData[activeRoomIndex];
 	chatArea.innerHTML = '';
 	if (roomsData[activeRoomIndex].messages.length === 0) {
 		// Item 47: brand-new room → invite guidance card instead of a blank
@@ -110,20 +170,18 @@ export function renderChatArea() {
 		chatArea.appendChild(card);
 		return
 	}
+	// Item 27: a full render always lands on the most recent window;
+	// older messages page in on scroll-up (see expandMessageWindow).
+	msgWindowStart = initialWindowStart(rd.messages.length);
 	bulkRenderDepth++;
 	try {
-		roomsData[activeRoomIndex].messages.forEach(m => {
-			const meta = { id: m.id, reactions: m.reactions, mentions: m.mentions, mentionsMe: m.mentionsMe, quote: m.quote, ttl: m.ttl, edited: m.edited, deleted: m.deleted, burned: m.burned, read: m.read, readBy: m.readBy };
-			if (m.type === 'me') addMsg(m.text, true, m.msgType || 'text', m.timestamp, meta);
-			else if (m.type === 'system') addSystemMsg(m.text, true, m.timestamp);
-			else addOtherMsg(m.text, m.userName, m.avatar, true, m.msgType || 'text', m.timestamp, meta)
-		})
+		renderMessageSlice(rd)
 	} finally {
 		bulkRenderDepth--;
 	}
 	// #15: the single scroll write for the whole replay.
-	chatArea.scrollTop = chatArea.scrollHeight;}
-
+	chatArea.scrollTop = chatArea.scrollHeight;
+}
 // Add a message to the chat area
 // 添加消息到聊天区域
 export function addMsg(text, isHistory = false, msgType = 'text', timestamp = null, meta = null) {
@@ -1330,6 +1388,22 @@ export function markMessageReadDom(mid) {
 export { setupSearchUI, toggleSearchBar } from './chat.search.js';
 import { setSearchNotifier } from './chat.search.js';
 setSearchNotifier((text, isHistory) => addSystemMsg(text, isHistory));
+import { setJumpExpander } from './chat.search.js';
+setJumpExpander((mid) => expandWindowForMessage(mid));
+
+// Item 27: widen the rendered window to include an in-memory jump target.
+// Returns false when the message is absent from rd.messages entirely —
+// the caller (chat.search.js) then shows the search.not_loaded notice.
+function expandWindowForMessage(mid) {
+	const rd = roomsData[activeRoomIndex];
+	const idx = rd ? rd.messages.findIndex(m => m && m.id === mid) : -1;
+	if (idx >= 0 && idx < msgWindowStart) {
+		msgWindowStart = windowStartForIndex(idx, msgWindowStart);
+		renderMessageSlice(rd);
+		return true
+	}
+	return idx >= 0
+}
 // Select cluster lives in chat.select.js — forwarded exports (item 48).
 // exitSelectMode is also imported back: renderChatArea() calls it.
 import { exitSelectMode, setSelectNotifier } from './chat.select.js';

@@ -70,8 +70,7 @@ export default defineConfig({
 						if (id.includes('qrcode-generator')) {
 							return 'qrcode'
 						}
-						// (aes-js / js-chacha20 are no longer dependencies —
-						// the crypto stack is elliptic + js-sha256 + @stablelib.)
+						// (the crypto stack is elliptic + js-sha256 + @stablelib.)
 						if (/elliptic|js-sha256|@stablelib/.test(id)) {
 							return 'crypto-libs'
 						}

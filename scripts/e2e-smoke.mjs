@@ -94,7 +94,7 @@ const devtoolsUrl = await new Promise((resolve, reject) => {
 
 const cdp = await new Promise((resolve, reject) => {
 	const ws = new WebSocket(devtoolsUrl);
-	let seq = 0; const pending = new Map(); const sessions = new Map();
+	let seq = 0; const pending = new Map(); const _sessions = new Map();
 	ws.onmessage = (ev) => {
 		const msg = JSON.parse(ev.data);
 		if (msg.id && pending.has(msg.id)) { const { res, rej } = pending.get(msg.id); pending.delete(msg.id); msg.error ? rej(new Error(JSON.stringify(msg.error))) : res(msg.result); }

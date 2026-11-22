@@ -18,6 +18,14 @@ export function setSearchNotifier(fn) {
 	if (typeof fn === 'function') notifySystem = fn;
 }
 
+// Item 27: DOM-window expansion for jump targets lives in chat.js (it owns
+// the window state); injected here to avoid an import cycle, same pattern
+// as setSearchNotifier above.
+let jumpExpander = null;
+export function setJumpExpander(fn) {
+	if (typeof fn === 'function') jumpExpander = fn;
+}
+
 // ==================== v1.1.0: local history search ====================
 // 本地历史搜索。SECURITY：只在内存态 rd.messages 上扫描（本地历史加载后
 // 本就合并进该缓冲），零新增存储；焚毁/撤回条目 text 已置 null 天然不可搜。
@@ -162,7 +170,10 @@ function runSearch() {
 
 function jumpToMessage(mid) {
 	if (!mid) return;
-	const el = document.querySelector('#chat-area [data-mid="' + mid + '"]');
+	let el = document.querySelector('#chat-area [data-mid="' + mid + '"]');
+	if (!el && jumpExpander && jumpExpander(mid)) {
+		el = document.querySelector('#chat-area [data-mid="' + mid + '"]')
+	}
 	if (!el) {
 		notifySystem(t('search.not_loaded', 'This message is not in the current view (older than loaded history).'), true);
 		return

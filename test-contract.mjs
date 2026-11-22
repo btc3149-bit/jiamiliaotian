@@ -52,7 +52,7 @@ function extractLiteral(src, name) {
 const RL = new Function(`return (${extractLiteral(serverSrc, 'RL')});`)();
 const serverSandbox = { crypto, RL, hsIpMap: new Map(), logEvent: () => {} };
 {
-	const names = ['encryptMessage', 'decryptMessage', 'isString', 'isArray', 'isObject', 'generateClientId', 'rlBucketAllow', 'rlByteWindowAllow', 'rlIpHandshakeAllow', 'rlIpHandshakeCount'];
+	const names = ['encryptMessage', 'decryptMessage', 'isString', 'isObject', 'generateClientId', 'rlBucketAllow', 'rlByteWindowAllow', 'rlIpHandshakeAllow', 'rlIpHandshakeCount'];
 	const code = names.map((n) => extractArrow(serverSrc, n)).join('\n')
 		+ `\nreturn { ${names.join(', ')} };`;
 	const factory = new Function('crypto', 'RL', 'hsIpMap', 'logEvent', code);
@@ -163,7 +163,7 @@ console.log('=== test-contract: type guards + clientId ===');
 	const vals = ['x', '', [], [1], {}, { a: 1 }, null, undefined, 0, 42, true];
 	const same = (fnW, fnS) => vals.every((v) => fnW(v) === fnS(v));
 	check('isString agrees', same(wUtils.isString, sUtils.isString));
-	check('isArray agrees', same(wUtils.isArray, sUtils.isArray));
+	// isArray was removed from BOTH sides as dead code (item 10) — no longer part of the contract.
 	check('isObject agrees', same(wUtils.isObject, sUtils.isObject));
 	check('generateClientId shape agrees (16 hex)', /^[0-9a-f]{16}$/.test(wUtils.generateClientId()) && /^[0-9a-f]{16}$/.test(sUtils.generateClientId()));
 }

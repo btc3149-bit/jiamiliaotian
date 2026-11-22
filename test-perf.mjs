@@ -182,7 +182,7 @@ console.log('=== perf #12/#26: file receive memory ===');
 		status: 'receiving', receivedVolumes: new Set([0]), totalVolumes: 10,
 		volumeData: ['x'], sentVolumes: 0
 	};
-	window.fileTransfers.set('fid12', t1);
+	globalThis.window.fileTransfers.set('fid12', t1);
 	for (let i = 0; i < 10; i++) updateFileProgress('fid12');
 	check('rapid progress updates throttled to a single scan', scans === 1);
 	await sleep(160);
@@ -201,7 +201,7 @@ console.log('=== perf #12/#26: file receive memory ===');
 		volumeData: [b64], originalHash: sha256(raw),
 		receivedVolumes: new Set([0]), totalVolumes: 1
 	};
-	window.fileTransfers.set('fid26', t2);
+	globalThis.window.fileTransfers.set('fid26', t2);
 	const blob1 = await getTransferBlob('fid26');
 	check('first decode returns a Blob of the original size', !!blob1 && blob1.size === raw.length);
 	check('volume originals released after first decode', t2.volumeData === null);
@@ -217,5 +217,5 @@ console.log('=== perf #12/#26: file receive memory ===');
 
 console.log(`\ntest-perf: ${passed} passed, ${failed} failed`);
 const { unlinkSync } = await import('node:fs');
-try { unlinkSync('.tmp-nodecrypt-perf.mjs'); } catch (_e) {}
+try { unlinkSync('.tmp-nodecrypt-perf.mjs'); } catch (_e) { /* already gone */ }
 process.exit(failed > 0 ? 1 : 0);

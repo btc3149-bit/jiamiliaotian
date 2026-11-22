@@ -135,7 +135,6 @@ console.log('=== filestream: archive ===');
 		Buffer.from(inflateSync(new Uint8Array((await legacyDeflate(combined))))).equals(Buffer.from(combined)));
 	check('fileCount + manifest', fileCount === 2 && fileManifest.length === 2 &&
 		fileManifest[0].name === 'alpha.txt' && fileManifest[1].size === b.length);
-	const c = await import('node:crypto');
 	check('archiveHash = incremental sha256 of raw archive',
 		archiveHash === nodeCrypto.createHash('sha256').update(combined).digest('hex'));
 	check('compressedSize consistent', compressedSize === decodeVolumes(volumes).length);

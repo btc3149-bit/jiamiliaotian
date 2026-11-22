@@ -3,8 +3,6 @@
 
 import {
 	$,
-	createElement,
-	$id,
 	createElementHTML,
 	on,
 	addClass,

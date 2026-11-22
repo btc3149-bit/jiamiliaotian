@@ -141,7 +141,6 @@ import {	renderUserList,       // 渲染用户列表 / Render user list
 	openLoginModal,       // 打开登录窗口 / Open login modal
 	setupTabs,            // 设置页面标签切换 / Setup tab switching
 	autofillRoomPwd,      // 自动填充房间密码 / Autofill room password
-	generateLoginForm,    // 生成登录表单HTML / Generate login form HTML
 	openShareInvite,      // item 47: 空房邀请卡复用分享弹窗 / share modal for empty-room card
 	initLoginForm,        // 初始化登录表单 / Initialize login form
 	initFlipCard          // 初始化翻转卡片功能 / Initialize flip card functionality

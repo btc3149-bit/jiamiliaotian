@@ -159,6 +159,7 @@ check('trap: from outside → first/last', trapTabTarget(-1, 3, false) === 0 && 
 // ---------- static wiring assertions (DOM behaviour needs a browser) ----------
 const html = readFileSync('client/index.html', 'utf8');
 const chat = readFileSync('client/js/chat.js', 'utf8');
+const chatSearch = readFileSync('client/js/chat.search.js', 'utf8'); // search cluster split out of chat.js (item 48)
 const room = readFileSync('client/js/room.js', 'utf8');
 const main = readFileSync('client/js/main.js', 'utf8');
 const ui = readFileSync('client/js/ui.js', 'utf8');
@@ -177,9 +178,9 @@ check('css: sr-only helper present', css.includes('.sr-only'));
 check('chat: image alt no longer bare "image"', !chat.includes('alt="image"') && chat.includes('a11y.shared_image'));
 check('chat: live announcements wired', chat.includes('announceLive(') && chat.includes("'typing'") && chat.includes("'message'"));
 check('chat: image modal Esc + focus restore', chat.includes("e.key === 'Escape') closeModal()") && chat.includes('restoreModalFocus()'));
-check('chat: cross-room search used', chat.includes('searchMessagesAcrossRooms(roomsData, q'));
-check('chat: search scope note rendered', chat.includes('search.scope'));
-check('chat: search result switches room before jump', chat.includes('switchRoom(hit.roomIndex)') && chat.includes('jumpToMessage(m.id)'));
+check('chat: cross-room search used', chatSearch.includes('searchMessagesAcrossRooms(roomsData, q'));
+check('chat: search scope note rendered', chatSearch.includes('search.scope'));
+check('chat: search result switches room before jump', chatSearch.includes('switchRoom(hit.roomIndex)') && chatSearch.includes('jumpToMessage(m.id)'));
 check('chat: read chip shows count + names', chat.includes('buildReadChipHtml') && chat.includes('receipt.read_by'));
 check('chat: empty-room invite card present', chat.includes('jmlt-empty-room') && chat.includes('__jmltOpenShare'));
 check('room: receipts keep reader identity', room.includes('recordReader(entry, r.clientId)'));

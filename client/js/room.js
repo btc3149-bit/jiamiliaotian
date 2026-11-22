@@ -235,7 +235,6 @@ export function joinRoom(userName, roomName, password, modal = null, onResult) {
 	let closed = false;
 	const callbacks = {
 		onServerClosed: () => {
-			setStatus('Node connection closed');
 			// P2: mark this room as needing a peer-replay sync once the
 			// connection is re-established and the client list refreshes.
 			// P2: 标记本房间需要在重连成功（client list 刷新）后发起同伴重播。
