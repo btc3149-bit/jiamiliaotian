@@ -6,7 +6,7 @@ import { createBucket, bucketAllow, createByteWindow, byteWindowAllow, ipHandsha
 export { VapidStore } from './vapid.js';
 
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env, _ctx) {
     const url = new URL(request.url);
 
     // Web Push：客户端启动订阅前先来取 VAPID 公钥（public by design）。

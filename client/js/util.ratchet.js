@@ -212,6 +212,9 @@ export class RatchetGeneration {
 
 // ---- per-peer ratchet manager: generations + rekey bookkeeping ----
 export class PeerRatchet {
+	/**
+	 * @param {{ rootKey?: Uint8Array, isFirst?: boolean, canInitiateRekey?: boolean, skippedCap?: number, rekeyEvery?: number }} opts
+	 */
 	constructor({ rootKey, isFirst = false, canInitiateRekey = false, skippedCap = DEFAULT_SKIPPED_CAP, rekeyEvery = DEFAULT_REKEY_EVERY } = {}) {
 		if (!(rootKey instanceof Uint8Array) || rootKey.length !== 32) {
 			throw new Error('PeerRatchet: rootKey must be 32 bytes');

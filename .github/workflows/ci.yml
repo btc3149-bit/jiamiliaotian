@@ -35,6 +35,8 @@ jobs:
       - name: Audit dependencies (non-blocking, observation period)
         continue-on-error: true
         run: npm audit --audit-level=high || true
+      - name: Lint (ESLint correctness rules)
+        run: npm run lint
 
       - name: Build client bundle
         run: npm run build

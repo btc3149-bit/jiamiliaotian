@@ -1,0 +1,30 @@
+# EditorConfig — declares the CURRENT state per directory (review item 25).
+# 本文件只声明现状、防继续混写，不要求任何人重排已有代码。
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Client code is tab-indented (chat.js: 1151 tab lines / 0 space lines).
+[client/**]
+indent_style = tab
+
+# Node server is tab-indented (server.js: 535 tab lines / 0 space lines).
+[server/*.js]
+indent_style = tab
+
+# Worker is mixed in reality: ratelimit.js / push.js / vapid.js are
+# tab-indented, index.js / utils.js are space-indented. Declared as-is.
+[worker/**]
+indent_style = tab
+
+[worker/index.js]
+indent_style = space
+indent_size = 2
+
+[worker/utils.js]
+indent_style = space
+indent_size = 2

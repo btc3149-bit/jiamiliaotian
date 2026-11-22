@@ -17,7 +17,6 @@ import { t } from './util.i18n.js';
 import { sanitizeCallSignal, parseStunServers } from './util.validate.js';
 
 const RING_TIMEOUT_MS = 30 * 1000;      // unanswered ring gives up / 响铃 30s 超时
-const ICE_GATHER_TIMEOUT_MS = 8 * 1000; // don't wait forever for candidates
 
 // Read the user's call settings from local storage. Kept local (no import
 // of util.settings) to avoid an import cycle — same pattern as room.js.

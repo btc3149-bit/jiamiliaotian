@@ -11,11 +11,8 @@ import {
 	toggleReactionLocal,
 	renderReactions,
 	updateTypingIndicator,
-	saveDraft,
 	loadDraft,
-	clearDraft,
 	recallMessageLocal,
-	burnMessageLocal,
 	applyEditLocal,
 	armBurnTimer,
 	queueReadReceipt,
@@ -23,6 +20,7 @@ import {
 	markMessageReadDom
 } from './chat.js';
 import { reportPushSubscription } from './util.push.js';
+import { callBridge, hasBridge } from './util.bridge.js';
 import { selectReplayable, dedupeReplayBatch } from './util.validate.js';
 // v1.2.0 #11: offline send queue flush
 import { flushSendQueue } from './util.sendQueue.js';
@@ -286,7 +284,7 @@ export function joinRoom(userName, roomName, password, modal = null, onResult) {
 		onClientSync: (r) => handleClientSync(idx, r),
 		onClientReplay: (r) => handleClientReplay(idx, r),
 		onClientStatus: (r) => handleClientStatus(idx, r),
-		onClientCall: (r) => { if (window.__jmltOnCallSignal) window.__jmltOnCallSignal(r) },
+		onClientCall: (r) => { callBridge('onCallSignal', r) },
 		// TOFU pin could not be persisted (private browsing / storage off):
 		// warn once in-room instead of silently re-trusting every reconnect.
 		onPinPersistFailed: () => {
@@ -457,8 +455,8 @@ export function handleClientSecured(idx, user) {
 			text: msg
 		});
 		if (activeRoomIndex === idx) addSystemMsg(msg, true);
-		if (window.notifyMessage) {
-			window.notifyMessage(rd.roomName, 'system', msg, '', rd.chat && rd.chat.credentials ? rd.chat.credentials.channel : '')
+		if (hasBridge('notifyMessage')) {
+			callBridge('notifyMessage', rd.roomName, 'system', msg, '', rd.chat && rd.chat.credentials ? rd.chat.credentials.channel : '')
 		}
 	}
 }
@@ -490,9 +488,7 @@ export function handleClientLeft(idx, clientId) {
 	if (rd.statusMap) delete rd.statusMap[clientId];
 	// v1.5.0 #16: if the departing member was on a call with us, end it.
 	// v1.5.0 #16：离开成员若是通话对端，立即结束通话。
-	if (window.__jmltOnCallPeerLeft) {
-		try { window.__jmltOnCallPeerLeft(clientId) } catch (_e) { /* best-effort */ }
-	}
+	try { callBridge('onCallPeerLeft', clientId) } catch (_e) { /* best-effort */ }
 	clearTypingUser(idx, clientId); // P2: don't let a departed member's typing state linger
 	if (activeRoomIndex === idx) {
 		renderUserList(false);
@@ -652,8 +648,8 @@ export function handleClientMessage(idx, msg) {
 		// v1.2.0 #17：续传请求必须送达发送端，与当前激活房间无关（载荷只有
 		// fileId + 分卷下标，无内容）。
 		if (msgType === 'file_resume_req') {
-			if (window.handleFileMessage) {
-				window.handleFileMessage(msg.data, false, idx)
+			if (hasBridge('handleFileMessage')) {
+				callBridge('handleFileMessage', msg.data, false, idx)
 			}
 			return;
 		}
@@ -684,8 +680,8 @@ export function handleClientMessage(idx, msg) {
 			}
 
 			const notificationMsgType = msgType.includes('_private') ? 'private file' : 'file';
-			if (window.notifyMessage && msg.data && msg.data.fileName) {
-				window.notifyMessage(newRd.roomName, notificationMsgType, `${msg.data.fileName}`, realUserName, newRd.chat && newRd.chat.credentials ? newRd.chat.credentials.channel : '');
+			if (hasBridge('notifyMessage') && msg.data && msg.data.fileName) {
+				callBridge('notifyMessage', newRd.roomName, notificationMsgType, `${msg.data.fileName}`, realUserName, newRd.chat && newRd.chat.credentials ? newRd.chat.credentials.channel : '');
 			}
 		}
 
@@ -693,8 +689,8 @@ export function handleClientMessage(idx, msg) {
 		if (activeRoomIndex === idx) {
 			// If it's the active room, delegate to util.file.js to handle UI and file transfer state.
 			// This applies to all file-related messages (file_start, file_volume, file_end, etc.)
-			if (window.handleFileMessage) {
-				window.handleFileMessage(msg.data, msgType.includes('_private'), idx);
+			if (hasBridge('handleFileMessage')) {
+				callBridge('handleFileMessage', msg.data, msgType.includes('_private'), idx);
 			}
 		} else {
 			// If it's not the active room, only increment unread count for 'file_start' messages.
@@ -771,8 +767,8 @@ export function handleClientMessage(idx, msg) {
 
 	// Only add message to chat display if it's for the active room
 	if (activeRoomIndex === idx) {
-		if (window.addOtherMsg) {
-			window.addOtherMsg(msg.data, realUserName, realUserName, false, msgType, null, {
+		if (hasBridge('addOtherMsg')) {
+			callBridge('addOtherMsg', msg.data, realUserName, realUserName, false, msgType, null, {
 				id: msg.id || null,
 				mentions: Array.isArray(msg.mentions) ? msg.mentions : [],
 				mentionsMe: mentionsMe,
@@ -786,12 +782,12 @@ export function handleClientMessage(idx, msg) {
 	}
 
 	const notificationMsgType = msgType.includes('_private') ? `private ${msgType.split('_')[0]}` : msgType;
-	if (window.notifyMessage) {
+	if (hasBridge('notifyMessage')) {
 		// A direct @mention gets its own, more intrusive notification
 		if (mentionsMe) {
-			window.notifyMessage(newRd.roomName, 'mention', msg.data, realUserName, newRd.chat && newRd.chat.credentials ? newRd.chat.credentials.channel : '');
+			callBridge('notifyMessage', newRd.roomName, 'mention', msg.data, realUserName, newRd.chat && newRd.chat.credentials ? newRd.chat.credentials.channel : '');
 		} else {
-			window.notifyMessage(newRd.roomName, notificationMsgType, msg.data, realUserName, newRd.chat && newRd.chat.credentials ? newRd.chat.credentials.channel : '');
+			callBridge('notifyMessage', newRd.roomName, notificationMsgType, msg.data, realUserName, newRd.chat && newRd.chat.credentials ? newRd.chat.credentials.channel : '');
 		}
 	}
 }

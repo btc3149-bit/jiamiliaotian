@@ -92,6 +92,8 @@ import {
 } from './chat.js';
 // P1-C: Web Push 房间表访问器注入 / Web Push room-list accessor injection
 import { registerRoomListAccessor } from './util.push.js';
+// Item 48: module-level callback registry replacing window.__jmlt* bridges
+import { registerBridge } from './util.bridge.js';
 
 // v1.1.0 #2: 恐慌清除（双确认）/ Panic wipe (double-confirmed)
 import { panicWipeWithConfirm } from './util.panic.js';
@@ -126,7 +128,6 @@ import {	renderUserList,       // 渲染用户列表 / Render user list
 	openLoginModal,       // 打开登录窗口 / Open login modal
 	setupTabs,            // 设置页面标签切换 / Setup tab switching
 	autofillRoomPwd,      // 自动填充房间密码 / Autofill room password
-	generateLoginForm,    // 生成登录表单HTML / Generate login form HTML
 	initLoginForm,        // 初始化登录表单 / Initialize login form
 	initFlipCard          // 初始化翻转卡片功能 / Initialize flip card functionality
 } from './ui.js';
@@ -173,13 +174,11 @@ updateStaticTexts();
 
 // 把一些函数挂载到 window 对象上供其他模块使用
 // Expose functions to the global window object for accessibility
-window.addSystemMsg = addSystemMsg;
-window.addOtherMsg = addOtherMsg;
-window.joinRoom = joinRoom;
-window.notifyMessage = notifyMessage;
-window.setupEmojiPicker = setupEmojiPicker;
-window.handleFileMessage = handleFileMessage;
-window.downloadFile = downloadFile;
+registerBridge('addSystemMsg', addSystemMsg);
+registerBridge('addOtherMsg', addOtherMsg);
+registerBridge('joinRoom', joinRoom);
+registerBridge('notifyMessage', notifyMessage);
+registerBridge('handleFileMessage', handleFileMessage);
 
 // v1.8.3 CSP fix: the deployed worker sets script-src 'self' (no
 // 'unsafe-inline'), so inline event-handler ATTRIBUTES are REFUSED by
@@ -223,11 +222,11 @@ document.addEventListener('click', (e) => {
 // v1.3.0 #6/#7: settings panel lives in util.settings.js which cannot import
 // the renderers without a cycle — expose hooks instead.
 // v1.3.0 #6/#7：设置面板在 util.settings.js，直接导入渲染器会成环——改挂钩子。
-window.__jmltRenderRooms = () => renderRooms(activeRoomIndex);
-window.__jmltRenderChat = () => renderChatArea();
-window.__jmltAppendLocalHistory = (rd, entry) => {
+registerBridge('renderRooms', () => renderRooms(activeRoomIndex));
+registerBridge('renderChat', () => renderChatArea());
+registerBridge('appendLocalHistory', (rd, entry) => {
 	try { appendLocalHistory(rd, entry) } catch (_e) { /* best-effort */ }
-};
+});
 
 // v1.4.0 #14: prefill the login form with migrated credentials. Works both
 // on the login page (fill the main form) and inside a room (open the join
@@ -242,7 +241,7 @@ function fillLoginFormFields(prefix, data) {
 	if (p) { p.value = data.password || ''; p.readOnly = false; p.style.color = ''; p.style.background = ''; }
 	if (u && data.username) u.value = data.username;
 }
-window.__jmltOpenLoginPrefill = (data) => {
+function openLoginPrefill(data) {
 	if (!data || !data.roomName) return;
 	const loginContainer = $id('login-container');
 	const onLoginPage = !!(loginContainer && loginContainer.style.display !== 'none');
@@ -254,14 +253,15 @@ window.__jmltOpenLoginPrefill = (data) => {
 		openLoginModal();
 		fillLoginFormFields('-modal', data);
 	}
-};
+}
+registerBridge('openLoginPrefill', openLoginPrefill);
 
 // ==================== v1.5.0 #16: WebRTC call manager ====================
 // 通话管理器装在 main.js（信令回调经 room.js 的 window 钩子转发进来）。
 let callManager = null;
-window.__jmltOnCallSignal = (r) => { if (callManager) callManager.handleSignal(r) };
-window.__jmltOnCallPeerLeft = (clientId) => { if (callManager) callManager.handlePeerLeft(clientId) };
-window.__jmltUpdateCallBtn = () => {
+registerBridge('onCallSignal', (r) => { if (callManager) callManager.handleSignal(r) });
+registerBridge('onCallPeerLeft', (clientId) => { if (callManager) callManager.handlePeerLeft(clientId) });
+registerBridge('updateCallBtn', () => {
 	// v1.9.2: two call buttons — 📞 voice / 🎥 video — both gated on having a
 	// private-chat target. / 双通话按钮，均以私聊对象为可见前提。
 	for (const sel of ['.chat-call-btn', '.chat-video-btn']) {
@@ -270,7 +270,7 @@ window.__jmltUpdateCallBtn = () => {
 		const rd = roomsData[activeRoomIndex];
 		btn.style.display = (rd && rd.privateChatTargetId) ? '' : 'none';
 	}
-};
+});
 
 // 当 DOM 内容加载完成后执行初始化逻辑
 // Run initialization logic when the DOM content is fully loaded
@@ -323,7 +323,7 @@ window.addEventListener('DOMContentLoaded', () => {
 			const key = window.prompt(t('settings.import_creds_key', 'Migration key (to decrypt the credentials):') || '');
 			if (key) {
 				decryptMigration(bytes, key).then((data) => {
-					window.__jmltOpenLoginPrefill(data);
+					openLoginPrefill(data);
 					addSystemMsg(t('migration.prefilled', 'Room credentials imported from migration link — review and press ENTER to join.'), true)
 				}).catch((err) => {
 					const expired = err && err.message === 'expired';
@@ -842,7 +842,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
 // Listen for language change events
 // 监听语言切换事件
-window.addEventListener('languageChange', (event) => {
+window.addEventListener('languageChange', () => {
 	updateStaticTexts();
 });
 
@@ -874,7 +874,7 @@ document.addEventListener('dragenter', (e) => {
 	}
 });
 
-document.addEventListener('dragleave', (e) => {
+document.addEventListener('dragleave', () => {
 	dragCounter--;
 	if (dragCounter === 0) {
 		hasTriggeredAttach = false;
