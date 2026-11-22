@@ -39,7 +39,7 @@ RUN npm run build:docker
 
 # Second stage: Minimal image
 # 第二阶段：极小镜像
-FROM alpine:3.16
+FROM alpine:3.24
 
 # Install minimal Node.js and Nginx
 # 安装最小化版本的 Node.js 和 Nginx
