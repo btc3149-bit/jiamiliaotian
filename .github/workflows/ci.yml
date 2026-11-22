@@ -30,6 +30,6 @@ jobs:
 
       - name: Syntax check all JS sources
         run: |
-          for f in server/server.js worker/index.js worker/utils.js client/js/*.js; do
+          for f in server/server.js worker/index.js worker/utils.js worker/push.js worker/vapid.js client/js/*.js; do
             node --check "$f"
           done
