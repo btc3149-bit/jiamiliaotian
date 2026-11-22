@@ -1,6 +1,6 @@
 {
   "name": "jiamiliaotian",
-  "version": "1.9.3",
+  "version": "1.9.4",
   "description": "端到端加密房间",
   "main": "worker/index.js",
   "scripts": {
@@ -24,24 +24,24 @@
   },
   "homepage": "https://github.com/btc3149-bit/jiamiliaotian#readme",
   "devDependencies": {
-    "autoprefixer": "^10.4.21",
-    "cssnano": "^7.0.7",
-    "terser": "^5.39.2",
-    "vite": "^6.3.5",
+    "autoprefixer": "^10.7.0",
+    "cssnano": "^7.1.9",
+    "terser": "^5.51.4",
+    "vite": "^6.4.6",
     "wrangler": "^4.16.1"
   },
   "dependencies": {
-    "@dicebear/core": "^9.2.2",
-    "@dicebear/micah": "^9.2.2",
+    "@dicebear/core": "^9.4.3",
+    "@dicebear/micah": "^9.4.2",
     "@stablelib/aes": "^1.0.1",
     "@stablelib/chacha20poly1305": "^1.0.1",
     "@stablelib/gcm": "^1.0.1",
     "buffer": "^6.0.3",
-    "dompurify": "^3.2.6",
+    "dompurify": "^3.4.18",
     "elliptic": "^6.6.1",
-    "emoji-picker-element": "^1.26.3",
-    "fflate": "^0.8.2",
-    "js-sha256": "^0.11.0",
+    "emoji-picker-element": "^1.29.1",
+    "fflate": "^0.8.3",
+    "js-sha256": "^0.11.1",
     "qrcode-generator": "^2.0.4"
   }
 }
