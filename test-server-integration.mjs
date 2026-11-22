@@ -295,5 +295,20 @@ async function waitClose(ws, timeout = 4000) {
 	} finally { proc.kill('SIGKILL'); await sleep(200); }
 }
 
+{ // Item 32: /healthz — 200 + bare "ok", no business metadata whatsoever
+	const proc = await spawnServer({ PORT: '8094' }, 8094);
+	try {
+		console.log('=== test-server-integration: /healthz (item 32) ===');
+		const res = await fetch('http://127.0.0.1:8094/healthz');
+		const body = await res.text();
+		check('GET /healthz returns 200', res.status === 200);
+		check('GET /healthz body is exactly "ok"', body === 'ok');
+		check('/healthz leaks no metadata (no key/channel/client/version fields)',
+			!/rsa|key|channel|client|version|member|room/i.test(body));
+		const miss = await fetch('http://127.0.0.1:8094/nope');
+		check('unknown HTTP path returns bare 404', miss.status === 404);
+	} finally { proc.kill('SIGKILL'); await sleep(200); }
+}
+
 console.log(`\ntest-server-integration: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

@@ -177,6 +177,7 @@ const LANGUAGES = {
 			'action.cannot_share': 'Cannot share:',
 					// System messages
 			'system.security_warning': '⚠️ This link uses an old format. Room data is not encrypted.',
+			'security.pin_persist_failed': 'The server key pin could not be saved on this device (storage unavailable, e.g. private browsing). The pin is valid for this session only — trust will be re-established on your next visit.',
 			'system.file_send_failed': 'Failed to send files:',
 			'system.joined': 'joined the conversation',
 			'system.left': 'left the conversation',
@@ -468,6 +469,7 @@ const LANGUAGES = {
 			'action.cannot_share': '无法分享：',
 					// System messages
 			'system.security_warning': '⚠️ 此链接使用旧格式，房间数据未加密。',
+			'security.pin_persist_failed': '服务器密钥 pin 未能持久化到本设备（存储不可用，如隐私浏览模式），本次会话内有效；下次访问将重新建立信任。',
 			'system.file_send_failed': '文件发送失败：',
 			'system.joined': '加入了对话',
 			'system.left': '离开了对话',

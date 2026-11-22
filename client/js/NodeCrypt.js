@@ -24,6 +24,9 @@ import {
 	isRatchetEligible,
 	RATCHET_WIRE_PREFIX
 } from './util.ratchet.js';
+import {
+	t
+} from './util.i18n.js';
 window.Buffer = Buffer;
 
 // Main NodeCrypt class for secure communication
@@ -56,8 +59,14 @@ class NodeCrypt {
 			onClientSync: callbacks.onClientSync || null,
 			onClientReplay: callbacks.onClientReplay || null,
 			onClientStatus: callbacks.onClientStatus || null,
-			onClientCall: callbacks.onClientCall || null
+			onClientCall: callbacks.onClientCall || null,
+			onServerKeyMismatch: callbacks.onServerKeyMismatch || null,
+			onPinPersistFailed: callbacks.onPinPersistFailed || null
 		};
+		// One-shot flag: the pin-persistence warning fires at most once per
+		// instance, however many pin reads/writes fail.
+		// 一次性标志：pin 持久化警告每个实例最多触发一次。
+		this._pinPersistWarned = false;
 		try {
 			this.clientEc = new elliptic('curve25519')
 		} catch (error) {
@@ -177,6 +186,7 @@ class NodeCrypt {
 		};
 		this.callbacks.onServerClosed = null;
 		this.callbacks.onServerSecured = null;
+		this.callbacks.onPinPersistFailed = null;
 		this.callbacks.onClientSecured = null;
 		this.callbacks.onClientList = null;
 		this.callbacks.onClientMessage = null;
@@ -242,7 +252,13 @@ class NodeCrypt {
 					return
 				}
 			}
-		} catch (e) { /* non-handshake frame — ignored by design */ }
+		} catch (e) {
+			// Server-key handshake path: never swallow silently. Log ONLY the
+			// error type — the frame itself is remote-controlled and must
+			// never reach the logs (RULES invariant 1).
+			// server-key 握手路径不得静默吞异常：只记错误类型，帧内容绝不入日志（不变量 1）。
+			this.logEvent('onMessage-serverkey', (e && e.name) ? e.name : 'Error', 'error')
+		}
 		if (!this.serverShared) {
 			const parts = event.data.split('|');
 			if (!parts[0] || !parts[1]) {
@@ -1627,6 +1643,7 @@ class NodeCrypt {
 			stored = localStorage.getItem(this.pinKey())
 		} catch (error) {
 			this.logEvent('handleServerKey', error, 'error')
+			this.notifyPinPersistFailed()
 		}
 		const pinned = this.config.rsaPublicFixed ? this.config.rsaPublic : stored;
 		if (pinned) {
@@ -1641,6 +1658,7 @@ class NodeCrypt {
 						localStorage.setItem(this.pinKey(), serverKey)
 					} catch (error) {
 						this.logEvent('handleServerKey', error, 'error')
+						this.notifyPinPersistFailed()
 					}
 					this.config.rsaPublic = serverKey;
 					this.logEvent('handleServerKey', 'server key rotated — migration signature verified, pin updated');
@@ -1660,6 +1678,7 @@ class NodeCrypt {
 						localStorage.setItem(this.pinKey(), serverKey)
 					} catch (error) {
 						this.logEvent('handleServerKey', error, 'error')
+						this.notifyPinPersistFailed()
 					}
 					this.config.rsaPublic = serverKey;
 					this.logEvent('handleServerKey', 'user accepted new server key, pin reset');
@@ -1683,9 +1702,46 @@ class NodeCrypt {
 			localStorage.setItem(this.pinKey(), serverKey);
 		} catch (error) {
 			this.logEvent('handleServerKey', error, 'error')
+			this.notifyPinPersistFailed()
 		}
 		this.config.rsaPublic = serverKey;
 		return true
+	}
+
+	// One-time user notice when the TOFU pin cannot be read from / written
+	// to localStorage (private browsing, storage disabled, quota): without
+	// it, every reconnect is silently a "first connect" and a changed
+	// server key would never trigger the mismatch path (RULES invariant 3
+	// forbids silent trust changes). Notice ONLY — no logic changes: the
+	// pin stays valid in memory for this session.
+	// Overridable via callbacks.onPinPersistFailed (same level as
+	// onServerKeyMismatch); falls back to a native alert.
+	// pin 读写失败时的一次性用户提示（隐私模式/存储禁用/配额满）：否则每次
+	// 重连都静默变成「首连」，服务器密钥变更永不触发 mismatch（违反不变量
+	// 3 的「不得静默信任」）。纯提示、无逻辑变更：pin 本次会话内在内存有效。
+	// 可经 onPinPersistFailed 回调自定义（与 onServerKeyMismatch 同级），
+	// 缺省回退原生 alert。
+	notifyPinPersistFailed() {
+		if (this._pinPersistWarned) {
+			return
+		}
+		this._pinPersistWarned = true;
+		const message = t('security.pin_persist_failed', 'The server key pin could not be saved on this device, so it is valid for this session only.');
+		if (this.callbacks.onPinPersistFailed) {
+			try {
+				this.callbacks.onPinPersistFailed(message)
+			} catch (error) {
+				this.logEvent('notifyPinPersistFailed', error, 'error')
+			}
+			return
+		}
+		if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+			try {
+				window.alert('⚠️ ' + message)
+			} catch (error) {
+				this.logEvent('notifyPinPersistFailed', error, 'error')
+			}
+		}
 	}
 
 	// Verify a key-rotation migration signature: the pinned (previous) public
