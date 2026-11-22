@@ -4,6 +4,7 @@ import { deflate, inflate, Deflate } from 'fflate';
 import { showFileUploadModal } from './util.fileUpload.js';
 import { imageFileToCleanFile } from './util.image.js';
 import { t } from './util.i18n.js';
+import { focusIntoModal, restoreModalFocus, handleModalTab } from './util.a11yUx.js';
 // v1.2.0 #17: resume-request validation
 import { sanitizeResumeRequest } from './util.validate.js';
 // v1.7.0 #19: incremental SHA-256 (streaming hash of large files without
@@ -1082,7 +1083,7 @@ export async function previewFile(fileId) {
 			<div class="jmlt-file-preview-card">
 				<div class="jmlt-file-preview-header">
 					<span class="jmlt-file-preview-name">${escapeHTMLFileName(transfer.fileName)}</span>
-					<button type="button" class="jmlt-file-preview-close" aria-label="close">&times;</button>
+					<button type="button" class="jmlt-file-preview-close" aria-label="${escapeHTMLFileName(t('action.close', 'Close'))}">&times;</button>
 				</div>
 				${isImg
 					? `<img class="jmlt-file-preview-img" alt="${escapeHTMLFileName(transfer.fileName)}" src="${url}">`
@@ -1092,9 +1093,22 @@ export async function previewFile(fileId) {
 					<button type="button" class="jmlt-file-preview-close2">${t('action.close', 'Close')}</button>
 				</div>
 			</div>`;
+		overlay.setAttribute('role', 'dialog');
+		overlay.setAttribute('aria-modal', 'true');
+		overlay.setAttribute('aria-label', transfer.fileName || '');
 		document.body.appendChild(overlay);
+		// Item 41: Esc closes, focus moves in on open and returns on close,
+		// Tab is trapped while the preview is open.
+		focusIntoModal(overlay);
+		const onKey = (e) => {
+			if (e.key === 'Escape') close();
+			else handleModalTab(overlay, e);
+		};
+		document.addEventListener('keydown', onKey);
 		const close = () => {
+			document.removeEventListener('keydown', onKey);
 			overlay.remove();
+			restoreModalFocus();
 			setTimeout(() => URL.revokeObjectURL(url), 60000);
 		};
 		overlay.addEventListener('click', (e) => {

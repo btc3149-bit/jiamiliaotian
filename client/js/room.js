@@ -24,6 +24,7 @@ import {
 } from './chat.js';
 import { reportPushSubscription } from './util.push.js';
 import { selectReplayable, dedupeReplayBatch } from './util.validate.js';
+import { recordReader } from './util.a11yUx.js';
 // v1.2.0 #11: offline send queue flush
 import { flushSendQueue } from './util.sendQueue.js';
 // v1.3.0 #6: local-only room metadata (alias/group/pinned)
@@ -547,10 +548,15 @@ export function handleClientReadReceipt(idx, r) {
 	for (const mid of r.ids) {
 		if (!mid || !/^[A-Za-z0-9]{8,32}$/.test(mid)) continue;
 		const entry = rd.messages.find(m => m.id === mid && m.type === 'me');
-		if (entry && !entry.read) {
-			entry.read = true;
-			changed = true;
-			if (activeRoomIndex === idx) markMessageReadDom(mid)
+		if (entry) {
+			// Item 42: keep WHO read it. The receipt envelope already travels
+			// inside the E2EE content layer and carries the sender's clientId;
+			// the reader set is aggregated locally on the author's device
+			// only — no new server state. 1v1 behaviour is unchanged (the
+			// chip still lights on the first reader).
+			const isNew = recordReader(entry, r.clientId);
+			if (isNew) changed = true;
+			if (isNew && activeRoomIndex === idx) markMessageReadDom(mid)
 		}
 	}
 	void changed; // DOM updated per-id above; history re-render picks up entry.read

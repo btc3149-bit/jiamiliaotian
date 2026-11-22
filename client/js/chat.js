@@ -5,8 +5,17 @@ import {
 } from './util.avatar.js';
 import {
 	roomsData,
-	activeRoomIndex
+	activeRoomIndex,
+	switchRoom
 } from './room.js';
+import {
+	announceLive,
+	searchMessagesAcrossRooms,
+	readerNames,
+	focusIntoModal,
+	restoreModalFocus,
+	handleModalTab
+} from './util.a11yUx.js';
 import {
 	escapeHTML,
 	textToHTML
@@ -62,8 +71,24 @@ export function renderChatArea() {
 		return
 	}
 	chatArea.innerHTML = '';
+	if (roomsData[activeRoomIndex].messages.length === 0) {
+		// Item 47: brand-new room → invite guidance card instead of a blank
+		// pane. The button reuses the existing share modal via the bridge
+		// main.js installs (window.__jmltOpenShare); the card repeats the
+		// share modal's warning that the invite link carries credentials.
+		const card = createElement('div', { class: 'jmlt-empty-room' });
+		card.appendChild(createElement('div', { class: 'jmlt-empty-title' }, t('invite.empty_title', 'No messages yet')));
+		card.appendChild(createElement('div', { class: 'jmlt-empty-body' }, t('invite.empty_body', 'Invite others to this room. The invite link contains the room name and password — share it only with people you trust.')));
+		const inviteBtn = createElement('button', { type: 'button', class: 'jmlt-empty-invite-btn' }, t('invite.empty_btn', 'Invite to Room'));
+		on(inviteBtn, 'click', () => {
+			if (typeof window.__jmltOpenShare === 'function') window.__jmltOpenShare();
+		});
+		card.appendChild(inviteBtn);
+		chatArea.appendChild(card);
+		return
+	}
 	roomsData[activeRoomIndex].messages.forEach(m => {
-		const meta = { id: m.id, reactions: m.reactions, mentions: m.mentions, mentionsMe: m.mentionsMe, quote: m.quote, ttl: m.ttl, edited: m.edited, deleted: m.deleted, burned: m.burned, read: m.read };
+		const meta = { id: m.id, reactions: m.reactions, mentions: m.mentions, mentionsMe: m.mentionsMe, quote: m.quote, ttl: m.ttl, edited: m.edited, deleted: m.deleted, burned: m.burned, read: m.read, readBy: m.readBy };
 		if (m.type === 'me') addMsg(m.text, true, m.msgType || 'text', m.timestamp, meta);
 		else if (m.type === 'system') addSystemMsg(m.text, true, m.timestamp);
 		else addOtherMsg(m.text, m.userName, m.avatar, true, m.msgType || 'text', m.timestamp, meta)
@@ -130,7 +155,7 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 			const messageText = text.text ? textToHTML(text.text) : '';
 			const imageElements = text.images.map(imgData => {
 				const safeImgSrc = escapeHTML(imgData).replace(/javascript:/gi, '');
-				return `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
+				return `<img src="${safeImgSrc}" alt="${escapeHTML(t('a11y.shared_image', 'Shared image'))}" class="bubble-img">`;
 			}).join('');
 					if (messageText && imageElements) {
 				// Mixed content: text + images
@@ -154,16 +179,16 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 				// Mixed content: text + image
 				contentHtml = `<div class="mixed-content">
 					<div class="message-text">${messageText}</div>
-					<img src="${safeImgSrc}" alt="image" class="bubble-img">
+					<img src="${safeImgSrc}" alt="${escapeHTML(t('a11y.shared_image', 'Shared image'))}" class="bubble-img">
 				</div>`;
 			} else {
 				// Image only
-				contentHtml = `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
+				contentHtml = `<img src="${safeImgSrc}" alt="${escapeHTML(t('a11y.shared_image', 'Shared image'))}" class="bubble-img">`;
 			}
 		} else {
 			// Legacy format: plain image data URL
 			const safeImgSrc = escapeHTML(text).replace(/javascript:/gi, '');
-			contentHtml = `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
+			contentHtml = `<img src="${safeImgSrc}" alt="${escapeHTML(t('a11y.shared_image', 'Shared image'))}" class="bubble-img">`;
 		}
 	} else if (msgType === 'file' || msgType === 'file_private') {
 		// Handle file messages
@@ -190,9 +215,7 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 	const burnMark = (meta && meta.ttl) ? `<span class="msg-burn">🔥${meta.ttl < 60 ? meta.ttl + 's' : (meta.ttl / 60) + 'm'}</span>` : '';
 	// P1-C: read-receipt chip on own bubbles, revealed when peers confirm.
 	// P1-C: 自己气泡上的已读徽标，对端确认后亮起。
-	const readChipHtml = (meta && meta.read)
-		? `<span class="msg-read">✓✓</span>`
-		: (safeMid ? `<span class="msg-read" hidden>✓✓</span>` : '');
+	const readChipHtml = buildReadChipHtml(meta, safeMid);
 	const div = createElement('div', {
 		class: className,
 		...(safeMid ? { 'data-mid': safeMid } : {})
@@ -229,7 +252,7 @@ export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, 
 			const messageText = msg.text ? textToHTML(msg.text) : '';
 			const imageElements = msg.images.map(imgData => {
 				const safeImgSrc = escapeHTML(imgData).replace(/javascript:/gi, '');
-				return `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
+				return `<img src="${safeImgSrc}" alt="${escapeHTML(t('a11y.shared_image', 'Shared image'))}" class="bubble-img">`;
 			}).join('');
 					if (messageText && imageElements) {
 				// Mixed content: text + images
@@ -253,16 +276,16 @@ export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, 
 				// Mixed content: text + image
 				contentHtml = `<div class="mixed-content">
 					<div class="message-text">${messageText}</div>
-					<img src="${safeImgSrc}" alt="image" class="bubble-img">
+					<img src="${safeImgSrc}" alt="${escapeHTML(t('a11y.shared_image', 'Shared image'))}" class="bubble-img">
 				</div>`;
 			} else {
 				// Image only
-				contentHtml = `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
+				contentHtml = `<img src="${safeImgSrc}" alt="${escapeHTML(t('a11y.shared_image', 'Shared image'))}" class="bubble-img">`;
 			}
 		} else {
 			// Legacy format: plain image data URL
 			const safeImgSrc = escapeHTML(msg).replace(/javascript:/gi, '');
-			contentHtml = `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
+			contentHtml = `<img src="${safeImgSrc}" alt="${escapeHTML(t('a11y.shared_image', 'Shared image'))}" class="bubble-img">`;
 		}
 	} else if (msgType === 'file' || msgType === 'file_private') {
 		// Handle file messages
@@ -322,6 +345,10 @@ export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, 
 	}
 	chatArea.appendChild(bubbleWrap);
 	if (safeMid) renderReactions(safeMid);
+	if (!isHistory) {
+		// Item 41: throttled live-region announcement (sender only, no content).
+		announceLive(t('a11y.new_message', 'New message from {name}').replace('{name}', userName), 'message')
+	}
 	chatArea.scrollTop = chatArea.scrollHeight
 }
 
@@ -388,12 +415,26 @@ export function setupImagePreview() {
 // 显示图片模态框
 export function showImageModal(src) {
 	const modal = createElement('div', {
-		class: 'img-modal-bg'
-	}, `<div class="img-modal-blur"></div><div class="img-modal-content img-modal-content-overflow"><img src="${src}"class="img-modal-img"/><span class="img-modal-close">&times;</span></div>`);
+		class: 'img-modal-bg',
+		role: 'dialog',
+		'aria-modal': 'true',
+		'aria-label': t('a11y.shared_image', 'Shared image')
+	}, `<div class="img-modal-blur"></div><div class="img-modal-content img-modal-content-overflow"><img src="${src}"class="img-modal-img" alt="${escapeHTML(t('a11y.shared_image', 'Shared image'))}"/><span class="img-modal-close" role="button" tabindex="0" aria-label="${escapeHTML(t('action.close', 'Close'))}">&times;</span></div>`);
 	document.body.appendChild(modal);
-	on($('.img-modal-close', modal), 'click', () => modal.remove());
+	focusIntoModal(modal);
+	const closeModal = () => {
+		document.removeEventListener('keydown', modalKeyHandler);
+		modal.remove();
+		restoreModalFocus();
+	};
+	const modalKeyHandler = (e) => {
+		if (e.key === 'Escape') closeModal();
+		else handleModalTab(modal, e);
+	};
+	document.addEventListener('keydown', modalKeyHandler);
+	on($('.img-modal-close', modal), 'click', closeModal);
 	on(modal, 'click', (e) => {
-		if (e.target === modal) modal.remove()
+		if (e.target === modal) closeModal()
 	});
 	const img = $('img', modal);
 	let scale = 1;
@@ -828,7 +869,9 @@ export function updateTypingIndicator(usernames) {
 	// HTML interpolation (same rule as member list).
 	const names = usernames.slice(0, 3).map(u => escapeHTML(u || '')).join(', ');
 	const more = usernames.length > 3 ? t('ui.typing_more', ' and others') : '';
-	el.innerHTML = `<span class="typing-dots"><i></i><i></i><i></i></span><span class="typing-names">${names}${more}</span> ${t('ui.typing', 'is typing…')}`
+	el.innerHTML = `<span class="typing-dots"><i></i><i></i><i></i></span><span class="typing-names">${names}${more}</span> ${t('ui.typing', 'is typing…')}`;
+	// Item 41: throttled live-region announcement for screen readers.
+	announceLive(usernames.slice(0, 3).join(', ') + ' ' + t('ui.typing', 'is typing…'), 'typing')
 }
 
 // ==================== P2: per-room local drafts ====================
@@ -1139,13 +1182,86 @@ function flushReadReceipts() {
 	} catch (_e) { /* receipt sending is best-effort */ }
 }
 
+// Item 42: read chip with reader count. The chip title lists reader names
+// (locally aggregated from E2EE receipts — see room.js handleClientReadReceipt);
+// clicking opens the full list. Names are remote-controlled → escaped.
+function buildReadChipHtml(meta, safeMid) {
+	if (!safeMid) return '';
+	const rd = roomsData[activeRoomIndex];
+	const readers = (meta && Array.isArray(meta.readBy)) ? meta.readBy : [];
+	const names = readerNames({ readBy: readers }, rd && rd.userMap, t('ui.anonymous', 'Anonymous'));
+	const label = names.length
+		? escapeHTML(t('receipt.read_by', 'Read by {names}').replace('{names}', names.join(', ')))
+		: '';
+	const count = readers.length > 1 ? ' ' + readers.length : '';
+	return (meta && (meta.read || readers.length))
+		? `<span class="msg-read" role="button" tabindex="0" data-read-chip="${safeMid}" title="${label}" aria-label="${label}">✓✓${count}</span>`
+		: `<span class="msg-read" data-read-chip="${safeMid}" hidden>✓✓</span>`;
+}
+
+// Re-render one bubble's read chip after a new receipt arrives.
+export function refreshReadChipDom(mid) {
+	const rd = roomsData[activeRoomIndex];
+	if (!rd || !mid) return;
+	const entry = rd.messages.find(m => m.id === mid);
+	const chip = document.querySelector('#chat-area [data-mid="' + mid + '"] .msg-read');
+	if (!entry || !chip) return;
+	const tmp = document.createElement('div');
+	tmp.innerHTML = buildReadChipHtml({ read: entry.read, readBy: entry.readBy }, mid);
+	const fresh = tmp.firstChild;
+	if (fresh) chip.replaceWith(fresh);
+}
+
+// Click / Enter on a read chip → who-read list (author-only, local data).
+export function setupReadReceiptUI() {
+	const area = $id('chat-area');
+	if (!area || area.dataset.readUi === '1') return;
+	area.dataset.readUi = '1';
+	const open = (chip) => {
+		const mid = chip.getAttribute('data-read-chip');
+		const rd = roomsData[activeRoomIndex];
+		const entry = rd && rd.messages.find(m => m.id === mid);
+		if (!entry) return;
+		const names = readerNames(entry, rd.userMap, t('ui.anonymous', 'Anonymous'));
+		if (!names.length) return;
+		const prev = document.querySelector('.jmlt-readers-pop');
+		if (prev) prev.remove();
+		const pop = createElement('div', { class: 'jmlt-readers-pop', role: 'dialog', 'aria-modal': 'true', 'aria-label': t('receipt.title', 'Read by') });
+		const title = createElement('div', { class: 'jmlt-readers-title' }, t('receipt.title', 'Read by'));
+		pop.appendChild(title);
+		for (const n of names) pop.appendChild(createElement('div', { class: 'jmlt-readers-name' }, String(n)));
+		const closeBtn = createElement('button', { type: 'button', class: 'jmlt-readers-close' }, t('action.close', 'Close'));
+		pop.appendChild(closeBtn);
+		document.body.appendChild(pop);
+		focusIntoModal(pop);
+		const close = () => { pop.remove(); document.removeEventListener('keydown', onKey); restoreModalFocus(); };
+		const onKey = (e) => {
+			if (e.key === 'Escape') close();
+			else handleModalTab(pop, e);
+		};
+		document.addEventListener('keydown', onKey);
+		on(closeBtn, 'click', close);
+	};
+	on(area, 'click', (e) => {
+		const chip = e.target.closest && e.target.closest('[data-read-chip]');
+		if (chip && !chip.hidden) open(chip);
+	});
+	on(area, 'keydown', (e) => {
+		if ((e.key === 'Enter' || e.key === ' ') && e.target.closest && e.target.closest('[data-read-chip]')) {
+			e.preventDefault();
+			open(e.target.closest('[data-read-chip]'));
+		}
+	});
+}
+
 // Reveal the ✓✓ chip on one of my own bubbles when a peer confirms reading it.
 // 对端确认已读后，点亮自己气泡上的 ✓✓ 徽标。
 export function markMessageReadDom(mid) {
 	const id = String(mid || '');
 	if (!/^[A-Za-z0-9]{8,32}$/.test(id)) return;
 	const chip = document.querySelector('#chat-area [data-mid="' + id + '"] .msg-read');
-	if (chip) chip.hidden = false
+	if (chip) chip.hidden = false;
+	refreshReadChipDom(id)
 }
 
 // ==================== v1.1.0: local history search ====================
@@ -1167,8 +1283,21 @@ export function setupSearchUI() {
 	wrap.innerHTML = [
 		'<div class="jmlt-search-bar">',
 		'<input type="text" id="jmlt-search-input" class="jmlt-search-input" placeholder="">',
-		'<button type="button" class="jmlt-search-close" id="jmlt-search-close">✕</button>',
+		'<button type="button" class="jmlt-search-close" id="jmlt-search-close" aria-label="✕">✕</button>',
 		'</div>',
+		'<div class="jmlt-search-filters">',
+		'<input type="text" id="jmlt-search-sender" class="jmlt-search-sender" placeholder="">',
+		'<select id="jmlt-search-type" class="jmlt-search-type">',
+		'<option value="">' + escapeHTML(t('search.type_all', 'All types')) + '</option>',
+		'<option value="text">' + escapeHTML(t('search.type_text', 'Text')) + '</option>',
+		'<option value="image">' + escapeHTML(t('search.type_image', 'Image')) + '</option>',
+		'<option value="file">' + escapeHTML(t('search.type_file', 'File')) + '</option>',
+		'<option value="voice">' + escapeHTML(t('search.type_voice', 'Voice')) + '</option>',
+		'</select>',
+		'</div>',
+		// Item 45: honest scope — this is a LOCAL search over messages loaded
+		// on this device only; never imply server-side full search.
+		'<div class="jmlt-search-scope">' + escapeHTML(t('search.scope', 'Local search only: covers messages loaded on this device (open rooms + local history kept here). The server stores nothing and cannot search.')) + '</div>',
 		'<div class="jmlt-search-results" id="jmlt-search-results"></div>'
 	].join('');
 	main.insertBefore(wrap, main.querySelector('.chat-area'));
@@ -1177,6 +1306,20 @@ export function setupSearchUI() {
 		if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
 		searchDebounceTimer = setTimeout(runSearch, 250)
 	});
+	const senderInput = wrap.querySelector('#jmlt-search-sender');
+	if (senderInput) {
+		senderInput.placeholder = t('search.filter_sender', 'Sender');
+		senderInput.setAttribute('aria-label', t('search.filter_sender', 'Sender'));
+		on(senderInput, 'input', () => {
+			if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+			searchDebounceTimer = setTimeout(runSearch, 250)
+		});
+	}
+	const typeSel = wrap.querySelector('#jmlt-search-type');
+	if (typeSel) {
+		typeSel.setAttribute('aria-label', t('search.filter_type', 'Type'));
+		on(typeSel, 'change', runSearch);
+	}
 	on(input, 'keydown', (e) => {
 		if (e.key === 'Escape') toggleSearchBar()
 	});
@@ -1190,7 +1333,7 @@ export function toggleSearchBar() {
 	wrap.style.display = show ? 'block' : 'none';
 	if (show) {
 		const input = wrap.querySelector('#jmlt-search-input');
-		input.placeholder = t('search.placeholder', 'Search in this room…');
+		input.placeholder = t('search.cross_placeholder', 'Search all loaded rooms…');
 		input.focus();
 		runSearch()
 	} else {
@@ -1203,51 +1346,62 @@ function runSearch() {
 	if (!wrap || wrap.style.display === 'none') return;
 	const input = wrap.querySelector('#jmlt-search-input');
 	const results = wrap.querySelector('#jmlt-search-results');
-	const q = (input.value || '').trim().toLowerCase();
+	const q = (input.value || '').trim();
 	results.innerHTML = '';
-	const rd = roomsData[activeRoomIndex];
-	if (!rd) return;
 	if (!q) {
 		results.appendChild(createElement('div', { class: 'jmlt-search-hint' },
 			t('search.hint', 'Type to search messages in this room')));
 		return
 	}
-	const hits = [];
-	for (let i = rd.messages.length - 1; i >= 0 && hits.length < 50; i--) {
-		const m = rd.messages[i];
-		if (!m || m.type === 'system' || m.burned || m.deleted) continue;
-		if (typeof m.text !== 'string' || !m.text.toLowerCase().includes(q)) continue;
-		hits.push(m)
-	}
+	// Item 45: search ALL loaded rooms on this device (live buffers already
+	// include decrypted local history merged at join). Pure local — the
+	// scope note in the UI states this honestly.
+	const senderEl = wrap.querySelector('#jmlt-search-sender');
+	const typeEl = wrap.querySelector('#jmlt-search-type');
+	const hits = searchMessagesAcrossRooms(roomsData, q, {
+		sender: senderEl ? senderEl.value : '',
+		type: typeEl ? typeEl.value : '',
+		limit: 50
+	});
 	if (hits.length === 0) {
 		results.appendChild(createElement('div', { class: 'jmlt-search-hint' },
 			t('search.no_results', 'No results')));
 		return
 	}
-	for (const m of hits) {
+	const qLower = q.toLowerCase();
+	for (const hit of hits) {
+		const m = hit.message;
+		const room = roomsData[hit.roomIndex];
 		const row = createElement('div', { class: 'jmlt-search-row', 'data-mid': m.id || '' });
 		const meta = createElement('div', { class: 'jmlt-search-row-meta' });
 		const ts = m.timestamp ? new Date(m.timestamp) : null;
-		meta.textContent = (ts ? ts.toLocaleString() : '') + ' · ' + (m.type === 'me' ? (rd.myUserName || '') : (m.userName || ''));
+		const senderName = m.type === 'me' ? ((room && room.myUserName) || '') : (m.userName || '');
+		meta.textContent = (ts ? ts.toLocaleString() : '') + ' · ' + senderName + ' · ' +
+			t('search.in_room', 'in #{room}').replace('{room}', (room && room.roomName) || hit.roomName || '');
 		// snippet with safe <mark> via DOM construction (no innerHTML concatenation)
 		const snip = createElement('div', { class: 'jmlt-search-row-snip' });
-		const lower = m.text.toLowerCase();
+		const text = typeof m.text === 'string' ? m.text : '';
+		const lower = text.toLowerCase();
 		let pos = 0;
 		for (;;) {
-			const at = lower.indexOf(q, pos);
+			const at = lower.indexOf(qLower, pos);
 			if (at === -1) {
-				snip.appendChild(document.createTextNode(m.text.slice(pos)));
+				snip.appendChild(document.createTextNode(text.slice(pos)));
 				break
 			}
-			snip.appendChild(document.createTextNode(m.text.slice(pos, at)));
+			snip.appendChild(document.createTextNode(text.slice(pos, at)));
 			const mark = document.createElement('mark');
-			mark.textContent = m.text.slice(at, at + q.length);
+			mark.textContent = text.slice(at, at + qLower.length);
 			snip.appendChild(mark);
-			pos = at + q.length
+			pos = at + qLower.length
 		}
 		row.appendChild(meta);
 		row.appendChild(snip);
-		on(row, 'click', () => jumpToMessage(m.id));
+		on(row, 'click', () => {
+			// Item 45: switch room first, then jump once the room rendered.
+			if (hit.roomIndex !== activeRoomIndex) switchRoom(hit.roomIndex);
+			requestAnimationFrame(() => jumpToMessage(m.id));
+		});
 		results.appendChild(row)
 	}
 }

@@ -88,8 +88,20 @@ import {
 	queueReadReceipt,     // P1-C: 排队已读回执 / Queue a read receipt
 	isWindowReading,      // P1-C: 窗口是否处于阅读状态 / Is window in reading state
 	setupSearchUI,        // v1.1.0 #1: 本地历史搜索 / Local history search UI
+	toggleSearchBar,      // item 43: Ctrl/Cmd+K 切换搜索 / toggle search
+	setupReadReceiptUI,   // item 42: 已读名单点击查看 / read-by list UI
 	setupSelectModeUI     // v1.1.0 #4: 多选复制/转发 / Multi-select copy/forward UI
 } from './chat.js';
+import {
+	classifyShortcut,
+	nextRoomIndex,
+	getMentionQuery,
+	filterMentionCandidates,
+	focusIntoModal,
+	restoreModalFocus,
+	handleModalTab
+} from './util.a11yUx.js';
+import { switchRoom } from './room.js';
 // P1-C: Web Push 房间表访问器注入 / Web Push room-list accessor injection
 import { registerRoomListAccessor } from './util.push.js';
 
@@ -127,6 +139,7 @@ import {	renderUserList,       // 渲染用户列表 / Render user list
 	setupTabs,            // 设置页面标签切换 / Setup tab switching
 	autofillRoomPwd,      // 自动填充房间密码 / Autofill room password
 	generateLoginForm,    // 生成登录表单HTML / Generate login form HTML
+	openShareInvite,      // item 47: 空房邀请卡复用分享弹窗 / share modal for empty-room card
 	initLoginForm,        // 初始化登录表单 / Initialize login form
 	initFlipCard          // 初始化翻转卡片功能 / Initialize flip card functionality
 } from './ui.js';
@@ -337,7 +350,11 @@ window.addEventListener('DOMContentLoaded', () => {
 	setupBurnBtn(); // P1-B: burn-timer toggle in composer
 	// v1.1.0 #1/#4: 本地搜索 + 多选（多选条由 setupSelectModeUI 挂载）
 	setupSearchUI();
+	setupReadReceiptUI();
 	setupSelectModeUI();
+	// item 47: bridge so chat.js's empty-room invite card can open the
+	// existing share modal without an import cycle.
+	window.__jmltOpenShare = () => { try { openShareInvite(); } catch (_e) { /* best-effort */ } };
 	// v1.2.0 #9: 语音消息。单击开始/再击停止发送，Esc 取消，60s 上限自动停。
 	// 发送路径与图片一致：公共走 sendChannelMessage('voice')，私聊走加密信封。
 	const voiceBtn = document.querySelector('.chat-voice-btn');
@@ -529,6 +546,105 @@ window.addEventListener('DOMContentLoaded', () => {
 		}
 	});
 	
+
+	// ==================== item 42: @mention autocomplete ====================
+	// Candidates come ONLY from the active room's in-memory userMap (local,
+	// nothing leaves the device). The popup lives next to the composer;
+	// ArrowUp/Down + Enter/Tab select, Esc dismisses. This keydown listener
+	// is registered BEFORE the Enter-to-send listener below and stops
+	// propagation when it consumes a key, so Enter-to-send is never broken
+	// (and never fires while choosing a mention).
+	const mentionPop = document.createElement('div');
+	mentionPop.id = 'jmlt-mention-pop';
+	mentionPop.className = 'jmlt-mention-pop';
+	mentionPop.style.display = 'none';
+	mentionPop.setAttribute('role', 'listbox');
+	const mentionState = { candidates: [], index: 0, node: null, start: -1, end: -1 };
+	const inputWrap = input.closest('.input-message-container') || input.parentNode;
+	if (inputWrap) inputWrap.appendChild(mentionPop);
+
+	function closeMentionPop() {
+		mentionPop.style.display = 'none';
+		mentionPop.innerHTML = '';
+		mentionState.candidates = [];
+		mentionState.node = null;
+	}
+	function renderMentionPop() {
+		mentionPop.innerHTML = '';
+		mentionState.candidates.forEach((c, i) => {
+			const row = document.createElement('div');
+			row.className = 'jmlt-mention-row' + (i === mentionState.index ? ' active' : '');
+			row.setAttribute('role', 'option');
+			row.setAttribute('aria-selected', i === mentionState.index ? 'true' : 'false');
+			row.textContent = '@' + c.name;
+			row.addEventListener('mousedown', (ev) => { ev.preventDefault(); selectMention(i); });
+			mentionPop.appendChild(row);
+		});
+		mentionPop.style.display = mentionState.candidates.length ? 'block' : 'none';
+	}
+	function selectMention(i) {
+		const c = mentionState.candidates[i];
+		if (!c || !mentionState.node) { closeMentionPop(); return; }
+		try {
+			const sel = window.getSelection();
+			const range = document.createRange();
+			range.setStart(mentionState.node, mentionState.start);
+			range.setEnd(mentionState.node, mentionState.end);
+			sel.removeAllRanges();
+			sel.addRange(range);
+			range.deleteContents();
+			const textNode = document.createTextNode('@' + c.name + ' ');
+			range.insertNode(textNode);
+			range.setStartAfter(textNode);
+			range.collapse(true);
+			sel.removeAllRanges();
+			sel.addRange(range);
+		} catch (_e) { /* caret surgery is best-effort */ }
+		closeMentionPop();
+		input.focus();
+	}
+	function updateMentionPop() {
+		const rd = roomsData[activeRoomIndex];
+		if (!rd || !rd.userMap) { closeMentionPop(); return; }
+		const sel = window.getSelection();
+		if (!sel || !sel.rangeCount) { closeMentionPop(); return; }
+		const range = sel.getRangeAt(0);
+		const node = range.startContainer;
+		if (!range.collapsed || !node || node.nodeType !== 3 || !input.contains(node)) { closeMentionPop(); return; }
+		const before = node.textContent.slice(0, range.startOffset);
+		const mq = getMentionQuery(before);
+		if (!mq) { closeMentionPop(); return; }
+		const candidates = filterMentionCandidates(rd.userMap, mq.query, rd.myId, 8);
+		if (!candidates.length) { closeMentionPop(); return; }
+		mentionState.candidates = candidates;
+		mentionState.index = 0;
+		mentionState.node = node;
+		mentionState.start = mq.start;
+		mentionState.end = range.startOffset;
+		renderMentionPop();
+	}
+	input.addEventListener('input', updateMentionPop);
+	input.addEventListener('click', updateMentionPop);
+	input.addEventListener('keydown', (e) => {
+		if (mentionPop.style.display === 'none' || !mentionState.candidates.length) return;
+		if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+			e.preventDefault();
+			e.stopImmediatePropagation();
+			const d = e.key === 'ArrowDown' ? 1 : -1;
+			mentionState.index = (mentionState.index + d + mentionState.candidates.length) % mentionState.candidates.length;
+			renderMentionPop();
+		} else if (e.key === 'Enter' || e.key === 'Tab') {
+			e.preventDefault();
+			e.stopImmediatePropagation();
+			selectMention(mentionState.index);
+		} else if (e.key === 'Escape') {
+			e.preventDefault();
+			e.stopImmediatePropagation();
+			closeMentionPop();
+		}
+	});
+	input.addEventListener('blur', () => setTimeout(closeMentionPop, 150));
+
 	if (input) {
 		input.focus(); // 自动聚焦 / Auto focus
 		input.addEventListener('keydown', (e) => {
@@ -914,5 +1030,87 @@ window.addEventListener('keydown', (e) => {
 	if (e.ctrlKey && e.shiftKey && e.key === 'Backspace') {
 		e.preventDefault();
 		panicWipeWithConfirm();
+	}
+});
+
+// ==================== item 43: desktop shortcut system ====================
+// Ctrl/Cmd+K search · Alt+↑/↓ switch room · '?' help panel.
+// classifyShortcut() never claims the panic combo (Ctrl+Shift+Backspace)
+// or browser-reserved combos. '?' is gated to non-typing contexts so it
+// can never eat a literal question mark in the composer or a form field.
+function isTypingContext(el) {
+	if (!el) return false;
+	if (el.isContentEditable) return true;
+	const tag = (el.tagName || '').toLowerCase();
+	return tag === 'input' || tag === 'textarea' || tag === 'select';
+}
+function showShortcutHelp() {
+	const prev = document.querySelector('.jmlt-shortcut-help');
+	if (prev) { prev.remove(); return; }
+	const overlay = document.createElement('div');
+	overlay.className = 'jmlt-shortcut-help share-modal-overlay';
+	overlay.setAttribute('role', 'dialog');
+	overlay.setAttribute('aria-modal', 'true');
+	overlay.setAttribute('aria-label', t('shortcut.title', 'Keyboard Shortcuts'));
+	const rows = [
+		['Ctrl/⌘ + K', t('shortcut.search', 'Search messages')],
+		['Alt + ↑', t('shortcut.prev_room', 'Previous room')],
+		['Alt + ↓', t('shortcut.next_room', 'Next room')],
+		['?', t('shortcut.help', 'This help')],
+		['Esc', t('action.close', 'Close')]
+	];
+	const box = document.createElement('div');
+	box.className = 'share-modal-container jmlt-shortcut-box';
+	const h = document.createElement('h3');
+	h.textContent = t('shortcut.title', 'Keyboard Shortcuts');
+	box.appendChild(h);
+	for (const [k, desc] of rows) {
+		const row = document.createElement('div');
+		row.className = 'jmlt-shortcut-row';
+		const kb = document.createElement('kbd');
+		kb.textContent = k;
+		const sp = document.createElement('span');
+		sp.textContent = desc;
+		row.appendChild(kb);
+		row.appendChild(sp);
+		box.appendChild(row);
+	}
+	const closeBtn = document.createElement('button');
+	closeBtn.type = 'button';
+	closeBtn.className = 'share-copy-btn';
+	closeBtn.textContent = t('action.close', 'Close');
+	box.appendChild(closeBtn);
+	overlay.appendChild(box);
+	document.body.appendChild(overlay);
+	focusIntoModal(overlay);
+	const close = () => {
+		document.removeEventListener('keydown', onKey);
+		overlay.remove();
+		restoreModalFocus();
+	};
+	const onKey = (e) => {
+		if (e.key === 'Escape') close();
+		else handleModalTab(overlay, e);
+	};
+	document.addEventListener('keydown', onKey);
+	closeBtn.addEventListener('click', close);
+	overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+}
+window.__jmltShortcutHelp = showShortcutHelp;
+window.addEventListener('keydown', (e) => {
+	const action = classifyShortcut(e);
+	if (!action) return;
+	if (action === 'search') {
+		e.preventDefault();
+		toggleSearchBar();
+	} else if (action === 'room-prev' || action === 'room-next') {
+		if (roomsData.length < 2) return;
+		e.preventDefault();
+		const idx = nextRoomIndex(activeRoomIndex, action === 'room-next' ? 1 : -1, roomsData.length);
+		if (idx >= 0 && idx !== activeRoomIndex) switchRoom(idx);
+	} else if (action === 'help') {
+		if (isTypingContext(document.activeElement)) return;
+		e.preventDefault();
+		showShortcutHelp();
 	}
 });
