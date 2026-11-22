@@ -64,6 +64,74 @@ console.log('server started', config.wsHost, config.wsPort);
 var clients = {};
 var channels = {};
 
+// Remove a client exactly once: detach from its channel, delete an emptied
+// channel, broadcast the updated member list to the rest, drop the record.
+// Idempotent — the close handler and the stale-connection sweep share this
+// path (S-5 parity fix), and a terminated connection's later close event
+// must find nothing left to do instead of throwing.
+// 幂等摘除：摘频道、删空频道、向剩余成员广播新列表、删记录。close 处理器
+// 与过期清理共用此路径，被 terminate 的连接随后触发 close 时直接返回。
+const removeClient = (clientId) => {
+	const record = clients[clientId];
+	if (!record) {
+		return;
+	}
+
+	const channel = record.channel;
+
+	if (
+		channel &&
+		channels[channel]
+	) {
+
+		channels[channel].splice(channels[channel].indexOf(clientId), 1);
+
+		if (
+			channels[channel].length === 0
+		) {
+
+			delete(channels[channel]);
+
+		} else {
+
+			try {
+
+				const members = channels[channel];
+
+				for (
+					const member of members
+				) {
+
+					const client = clients[member];
+
+					if (
+						isClientInChannel(client, channel)
+					) {
+						sendMessage(client.connection, encryptMessage({
+							a: 'l',
+							p: members.filter((value) => {
+								return (
+									value !== member ?
+									true :
+									false
+								);
+							})
+						}, client.shared));
+					}
+
+				}
+
+			} catch (error) {
+				logEvent('close-list', [clientId, error], 'error');
+			}
+
+		}
+
+	}
+
+	delete(clients[clientId]);
+};
+
 // WebSocket server connection event handler
 // WebSocket 服务器连接事件处理程序
 wss.on('connection', (connection) => {
@@ -77,19 +145,32 @@ wss.on('connection', (connection) => {
 
 	const seenThreshold = (getTime() - config.seenTimeout);
 
+	// Collect first, then terminate + removeClient (S-5): mutating `clients`
+	// while iterating it skips entries, and terminating alone used to leave
+	// stale records and dead channel members behind.
+	// 先收集再逐个 terminate + removeClient，避免迭代中改对象漏删、记录残留。
+	const staleClientIds = [];
+
 	for (
 		const clientId in clients
 	) {
 		if (
 			clients[clientId].seen < seenThreshold
 		) {
-			try {
-				logEvent('connection-seen', clientId, 'debug');
-				clients[clientId].connection.terminate();
-			} catch (error) {
-				logEvent('connection-seen', error, 'error');
-			}
+			staleClientIds.push(clientId);
 		}
+	}
+
+	for (
+		const staleId of staleClientIds
+	) {
+		try {
+			logEvent('connection-seen', staleId, 'debug');
+			clients[staleId].connection.terminate();
+		} catch (error) {
+			logEvent('connection-seen', error, 'error');
+		}
+		removeClient(staleId);
 	}
 
 
@@ -199,67 +280,11 @@ wss.on('connection', (connection) => {
 
 		logEvent('close', [clientId, event], 'debug');
 
-
-		const channel = clients[clientId].channel;
-
-		if (
-			channel &&
-			channels[channel]
-		) {
-
-			channels[channel].splice(channels[channel].indexOf(clientId), 1);
-
-			if (
-				channels[channel].length === 0
-			) {
-
-
-				delete(channels[channel]);
-
-			} else {
-
-
-				try {
-
-					const members = channels[channel];
-
-					for (
-						const member of members
-					) {
-
-						const client = clients[member];
-
-						if (
-							isClientInChannel(client, channel)
-						) {
-							sendMessage(client.connection, encryptMessage({
-								a: 'l',
-								p: members.filter((value) => {
-									return (
-										value !== member ?
-										true :
-										false
-									);
-								})
-							}, client.shared));
-						}
-
-					}
-
-				} catch (error) {
-					logEvent('close-list', [clientId, error], 'error');
-				}
-
-			}
-
-		}
-
-
-		if (
-			clients[clientId]
-		) {
-			delete(clients[clientId]);
-		}
+		// S-5: shared idempotent removal. The record may already be gone
+		// (stale sweep terminated this connection first) — removeClient
+		// returns quietly instead of dereferencing a missing record.
+		// 与过期清理共用幂等摘除；记录已删时静默返回，不再未判空抛错。
+		removeClient(clientId);
 
 	});
 
@@ -306,6 +331,15 @@ const handleJoinChannel = (clientId, decrypted) => {
 		!isString(decrypted.p) ||
 		clients[clientId].channel
 	) {
+		return;
+	}
+
+	// R4 parity (mirrors worker/index.js handleJoinChannel): the client
+	// always joins with the sha256 hex hash of the room name. Enforce that
+	// format so arbitrary strings cannot become channel names.
+	// 与 Worker 逐字对齐：频道名强制为房间名的 sha256 十六进制哈希。
+	if (!/^[0-9a-f]{64}$/.test(decrypted.p)) {
+		logEvent('message-join', [clientId, 'invalid channel format'], 'error');
 		return;
 	}
 

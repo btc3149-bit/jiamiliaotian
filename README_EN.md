@@ -23,6 +23,20 @@ docker build -t jiamiliaotian . && docker run -d --name jiamiliaotian -p 80:80 j
 
 Access http://localhost:80
 
+### Feature Differences by Deployment Method (must read)
+
+| Capability | Cloudflare Workers (recommended) | Docker self-hosted |
+|---|---|---|
+| Web Push offline notifications | ✅ | ❌ Not implemented (subscriptions are silently ignored) |
+| Web Push endpoints (/api/vapid etc.) | ✅ | ❌ Node does not implement /api/vapid or push relay: subscription requests reported over the encrypted channel are silently ignored (no error, no notification) — this is not “subscribed but undelivered” |
+| Read receipts / reconnect catch-up | ✅ | ✅ (shared protocol layer) |
+| Security response headers (CSP etc.) | ✅ | ✅ Aligned (all five headers, incl. CSP/Permissions-Policy, match Workers item by item) |
+| TLS / HSTS | ✅ Cloudflare edge | ⚠️ Image serves HTTP 80 only; TLS and HSTS are the front reverse proxy's job (see TLS note below) |
+| Room sharding / horizontal scaling | ✅ Sharded per DO | ❌ Single process |
+| Server key rotation / migration signature | ✅ 24h rotation + 48h old-key migration signature | ❌ Node has no 24h rotation or migration signature: the RSA key is generated at process start and changes on every restart; pinned clients will hit a key mismatch, disconnect, and must confirm a pin reset to reconnect. Restarting the Node server means every member must re-confirm the server key |
+| Channel name validation | ✅ Enforces room-name SHA-256 hash format | ✅ Aligned (both enforce the room-name SHA-256 hash format) |
+| Stale connection cleanup | ✅ Detaches from channel and broadcasts on cleanup | ✅ Aligned (detaches from channel and broadcasts; member lists contain no offline members) |
+
 > **TLS note for Docker deployments**: The Docker image serves plain HTTP only (port 80). In production, always put a TLS-terminating reverse proxy in front of it (e.g. Caddy / Nginx / Cloudflare Tunnel) and let that layer redirect HTTP to HTTPS and send `Strict-Transport-Security: max-age=31536000; includeSubDomains`. Do not expose port 80 directly to the public internet in plaintext.
 
 ### Method 4: Local Development Deployment
