@@ -18,16 +18,19 @@
 npm ci --ignore-scripts
 npm run build
 
-# 2. 派生平台图标（.ico/.icns 从 1024 源图生成）
-npx @tauri-apps/cli icon desktop/src-tauri/icons/icon-source.png -o desktop/src-tauri/icons
+# 2. 安装钉版 Tauri CLI（desktop/package.json 里锁定的 @tauri-apps/cli 预编译
+#    二进制；不要再用 cargo 从源码编译 CLI，CI 同此路径）
+cd desktop
+npm ci --ignore-scripts
 
-# 3. 构建（产物在 desktop/src-tauri/target/release/bundle/）
-cd desktop/src-tauri
-cargo install tauri-cli --version '^2' --locked
-cargo tauri build
+# 3. 派生平台图标（.ico/.icns 从 1024 源图生成）
+npx tauri icon src-tauri/icons/icon-source.png -o src-tauri/icons
+
+# 4. 构建（产物在 desktop/src-tauri/target/release/bundle/）
+npx tauri build
 
 # 开发模式（热重载，先跑过第 1 步）
-cargo tauri dev
+npx tauri dev
 ```
 
 ## CI 构建
@@ -53,12 +56,13 @@ Tauri 2 同一代码库可出 Android/iOS。**注意：移动端构建无法在 
 ## Android
 
 ```bash
-# 前置：Android Studio（SDK + NDK）、Rust、JDK 17
+# 前置：Android Studio（SDK + NDK）、Rust、JDK 17；先在 desktop/ 下跑过
+# 本地构建第 2 步（npm ci 装钉版 Tauri CLI），以下命令均在 desktop/ 下执行
 rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
-npx @tauri-apps/cli android init   # 在 desktop/ 下生成 gen/android 工程
-npm run build                       # web client
-npx @tauri-apps/cli android dev     # 真机调试
-npx @tauri-apps/cli android build   # 产出 APK/AAB（自动签名用 debug keystore；发布需自建 keystore）
+npx tauri android init   # 在 desktop/ 下生成 gen/android 工程
+npm run build                       # web client（仓库根目录执行）
+npx tauri android dev     # 真机调试
+npx tauri android build   # 产出 APK/AAB（自动签名用 debug keystore；发布需自建 keystore）
 ```
 
 ## Android 正式签名与 Google Play 上架（v1.7.0 #18）
@@ -103,10 +107,10 @@ keytool -genkey -v -keystore upload-keystore.jks -keyalg RSA -keysize 2048 -vali
 ```bash
 # 前置：macOS + Xcode + Apple 开发者账号（$99/年，真机/上架必需）
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim
-npx @tauri-apps/cli ios init
+npx tauri ios init
 npm run build
-npx @tauri-apps/cli ios dev
-npx @tauri-apps/cli ios build
+npx tauri ios dev
+npx tauri ios build
 ```
 
 ## 移动端安全提示

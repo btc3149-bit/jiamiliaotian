@@ -73,15 +73,21 @@ jobs:
           npm ci --ignore-scripts
           npm run build
 
+      # Tauri CLI comes from the pinned npm package in desktop/package.json
+      # (prebuilt binary) — the CLI is never compiled from source with cargo.
+      # Tauri CLI 用 desktop/package.json 里钉版的 npm 包（预编译二进制），
+      # 不再用 cargo 从源码编译。
+      - name: Install Tauri CLI (pinned npm package)
+        working-directory: desktop
+        run: npm ci --ignore-scripts
+
       - name: Derive Tauri icons (.icns/.ico) from source PNG
-        run: |
-          npx --yes @tauri-apps/cli@latest icon desktop/src-tauri/icons/icon-source.png -o desktop/src-tauri/icons
+        working-directory: desktop
+        run: npx tauri icon src-tauri/icons/icon-source.png -o src-tauri/icons
 
       - name: Build desktop bundles
-        working-directory: desktop/src-tauri
-        run: |
-          cargo install tauri-cli --version '^2' --locked
-          cargo tauri build ${{ matrix.args }}
+        working-directory: desktop
+        run: npx tauri build ${{ matrix.args }}
 
       - name: Upload artifacts (Windows)
         if: matrix.platform == 'windows-latest'
