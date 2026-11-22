@@ -10,6 +10,20 @@
 const VERSION = 'jmlt-pwa-v2';
 const SHELL_CACHE = `${VERSION}-shell`;
 
+// Web Share Target 交接（S-4）：载荷暂存于 Cache Storage 的独立缓存，
+// 页面取走即删（take = delete），且载荷内嵌 ts、页面侧校验 5 分钟 TTL，
+// 过期/畸形一律丢弃。Cache Storage 在浏览器实现中落盘，与不变量 7 的
+// 「只进内存」字面表述存在已知残留偏差——取舍与缓解见 README 安全说明。
+// 页面侧同一常量在 client/js/main.js（两处无法共享模块，改一处必改另一处）。
+const SHARE_CACHE = 'jmlt-share-v1';
+const SHARE_TTL_MS = 5 * 60 * 1000;
+
+function isSharePayloadFresh(payload, now) {
+	if (!payload || typeof payload.ts !== 'number' || !Number.isFinite(payload.ts)) return false;
+	const age = now - payload.ts;
+	return age <= SHARE_TTL_MS && age >= -5000;
+}
+
 // 预缓存：应用入口 + 清单 + 图标。JS/CSS 由运行时 SWR 策略补充。
 const PRECACHE = [
 	'./',
@@ -33,6 +47,8 @@ self.addEventListener('activate', (event) => {
 		await Promise.all(
 			keys.filter((k) => !k.startsWith(VERSION)).map((k) => caches.delete(k))
 		);
+		// S-4：新 SW 接管即作废上一代未取走的分享载荷，不等页面来取。
+		await caches.delete(SHARE_CACHE);
 		await self.clients.claim();
 	})());
 });
@@ -87,9 +103,13 @@ self.addEventListener('fetch', (event) => {
 
 	// ==================== Web Share Target (v1.3.0 #13) ====================
 	// 安卓 PWA 分享入口：系统分享面板把 文本/图片 POST 到这里。
-	// SECURITY（RULES.md 不变量 7 对照）：
-	// - 分享载荷只进内存里的 Cache 条目，等应用取走即焚（take = delete）
-	// - 不写 IndexedDB / localStorage，不做任何持久化
+	// SECURITY（RULES.md 不变量 7 对照，S-4 口径）：
+	// - 分享载荷暂存于 Cache Storage 的独立缓存 'jmlt-share-v1'，页面
+	//   取走即焚（take = delete）；浏览器实现中 Cache Storage 落盘，
+	//   与不变量字面「只进内存」有已知残留偏差，缓解为：独立缓存名、
+	//   取走即删、5 分钟 TTL（payload.ts + 页面侧校验）、新 SW 激活
+	//   时显式删除整个分享缓存。取舍说明见 README 安全说明。
+	// - 不写 IndexedDB / localStorage
 	// - 只接受同源 POST ./share-target，其余一律不管
 	// iOS 不支持 share_target —— 属性差异，README 已注明。
 	if (req.method === 'POST' && url.origin === self.location.origin &&
@@ -98,6 +118,7 @@ self.addEventListener('fetch', (event) => {
 			try {
 				const form = await req.formData();
 				const payload = {
+					ts: Date.now(),
 					title: String(form.get('title') || '').slice(0, 500),
 					text: String(form.get('text') || '').slice(0, 10000),
 					url: String(form.get('url') || '').slice(0, 2000),
@@ -123,7 +144,7 @@ self.addEventListener('fetch', (event) => {
 					});
 					total += f.size
 				}
-				const cache = await caches.open('jmlt-share-v1');
+				const cache = await caches.open(SHARE_CACHE);
 				// 用合成的 GET 请求做键（Cache API 不允许 POST 条目）
 				await cache.put(new Request('./__share-payload'), new Response(JSON.stringify(payload), {
 					headers: { 'Content-Type': 'application/json' }
