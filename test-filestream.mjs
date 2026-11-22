@@ -155,5 +155,37 @@ console.log('=== filestream: size caps ===');
 	check('MAX_TRANSFER_BYTES is 256MB', MAX_TRANSFER_BYTES === 256 * 1024 * 1024);
 }
 
+// ---- 5. preview kind mapping (upgrade #44) ----
+console.log('=== filestream: preview kind mapping (#44) ===');
+{
+	const { guessMime, previewKindForFile } = mod;
+	check('guessMime: mp4', guessMime('a.mp4') === 'video/mp4');
+	check('guessMime: webm', guessMime('a.webm') === 'video/webm');
+	check('guessMime: mp3', guessMime('a.mp3') === 'audio/mpeg');
+	check('guessMime: ogg', guessMime('a.ogg') === 'audio/ogg');
+	check('guessMime: wav', guessMime('a.wav') === 'audio/wav');
+	check('guessMime: pdf', guessMime('a.pdf') === 'application/pdf');
+	check('guessMime: txt', guessMime('a.txt') === 'text/plain');
+	check('guessMime: unknown falls back to octet-stream', guessMime('a.bin') === 'application/octet-stream');
+	check('preview: image -> image', previewKindForFile('a.png') === 'image');
+	check('preview: mp4 -> video', previewKindForFile('clip.mp4') === 'video');
+	check('preview: WEBM uppercase -> video', previewKindForFile('clip.WEBM') === 'video');
+	check('preview: mp3 -> audio', previewKindForFile('song.mp3') === 'audio');
+	check('preview: ogg -> audio', previewKindForFile('voice.ogg') === 'audio');
+	check('preview: wav -> audio', previewKindForFile('voice.wav') === 'audio');
+	check('preview: pdf -> pdf', previewKindForFile('doc.pdf') === 'pdf');
+	check('preview: txt -> text', previewKindForFile('notes.txt') === 'text');
+	check('preview: json -> text', previewKindForFile('data.json') === 'text');
+	check('preview: zip -> generic (save card)', previewKindForFile('pack.zip') === 'generic');
+	check('preview: unknown -> generic (save card)', previewKindForFile('blob.bin') === 'generic');
+	check('preview: explicit blob MIME wins over name', previewKindForFile('noext', 'video/mp4') === 'video');
+	// Local-only invariant: preview sources must be blob: URLs from the
+	// decrypted transfer — the module source must not reference any
+	// third-party online preview service.
+	const src = (await import('node:fs')).readFileSync(new URL('./client/js/util.file.js', import.meta.url), 'utf-8');
+	check('preview: no third-party online preview service referenced',
+		!/docs\.google\.com|view\.officeapps|google\.com\/viewer/i.test(src));
+}
+
 console.log(`\ntest-filestream: ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

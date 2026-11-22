@@ -985,7 +985,7 @@ export function isImageFileName(name) {
 	return IMAGE_EXT_RE.test(String(name || ''));
 }
 
-function guessMime(name) {
+export function guessMime(name) {
 	const n = String(name || '').toLowerCase();
 	const m = [
 		[/\.png$/, 'image/png'], [/\.jpe?g$/, 'image/jpeg'], [/\.gif$/, 'image/gif'],
@@ -997,6 +997,21 @@ function guessMime(name) {
 	];
 	for (const [re, mime] of m) if (re.test(n)) return mime;
 	return 'application/octet-stream';
+}
+
+// Map a file to its in-app preview kind (upgrade #44). Pure function of the
+// name/MIME so it can be unit-tested; previewFile renders only from the local
+// decrypted Blob — no third-party online preview service, ever (RULES).
+// 文件名/MIME → 应用内预览类型（升级 #44）。纯函数便于单测；previewFile 只
+// 渲染本地解密 Blob，严禁用第三方在线预览服务（RULES）。
+export function previewKindForFile(name, mime) {
+	const m = String(mime || guessMime(name) || '').toLowerCase();
+	if (m.startsWith('image/')) return 'image';
+	if (m.startsWith('video/')) return 'video';
+	if (m.startsWith('audio/')) return 'audio';
+	if (m === 'application/pdf') return 'pdf';
+	if (m === 'text/plain' || m === 'application/json') return 'text';
+	return 'generic';
 }
 
 // Decompress a completed single-file transfer into a Blob (hash-verified).
@@ -1075,24 +1090,63 @@ export async function previewFile(fileId) {
 			return;
 		}
 		const url = URL.createObjectURL(blob);
-		const isImg = isImageFileName(transfer.fileName);
+		// Preview kind from the decrypted Blob's MIME (upgrade #44). All
+		// sources are local blob: URLs — zero outbound requests.
+		// 预览类型取自解密 Blob 的 MIME（升级 #44）；源全是本地 blob: URL，零外发。
+		const kind = previewKindForFile(transfer.fileName, blob.type);
+		const safeName = escapeHTMLFileName(transfer.fileName);
+		const genericCard = `<div class="jmlt-file-preview-generic"><div class="file-icon">📄</div><div>${safeName}</div></div>`;
+		let bodyHtml;
+		if (kind === 'image') {
+			bodyHtml = `<img class="jmlt-file-preview-img" alt="${safeName}" src="${url}">`
+		} else if (kind === 'video') {
+			bodyHtml = `<video class="jmlt-file-preview-media" controls src="${url}"></video>`
+		} else if (kind === 'audio') {
+			bodyHtml = `<audio class="jmlt-file-preview-audio" controls src="${url}"></audio>`
+		} else if (kind === 'pdf' && !(typeof navigator !== 'undefined' && navigator.pdfViewerEnabled === false)) {
+			// Local Blob URL in an iframe/embed. Android WebViews without a
+			// built-in PDF viewer report pdfViewerEnabled === false (or fail
+			// to render) — those keep the save card below as the fallback.
+			// 本地 Blob URL 的 iframe/embed 预览。无内置 PDF 查看器的 Android
+			// WebView（pdfViewerEnabled === false 或渲染失败）走保存卡兜底。
+			bodyHtml = `<iframe class="jmlt-file-preview-pdf" title="${safeName}" src="${url}"></iframe>`
+		} else if (kind === 'text') {
+			// Cap the rendered text so a huge .txt cannot blow up the DOM.
+			// 文本渲染设上限，防止超大 .txt 撑爆 DOM。
+			const rawText = await blob.text();
+			const shown = rawText.length > 200 * 1024 ? rawText.slice(0, 200 * 1024) : rawText;
+			bodyHtml = `<pre class="jmlt-file-preview-text">${escapeHTMLFileName(shown)}</pre>`
+		} else {
+			bodyHtml = genericCard
+		}
 		overlay = document.createElement('div');
 		overlay.className = 'jmlt-file-preview-overlay';
 		overlay.innerHTML = `
 			<div class="jmlt-file-preview-card">
 				<div class="jmlt-file-preview-header">
-					<span class="jmlt-file-preview-name">${escapeHTMLFileName(transfer.fileName)}</span>
+					<span class="jmlt-file-preview-name">${safeName}</span>
 					<button type="button" class="jmlt-file-preview-close" aria-label="close">&times;</button>
 				</div>
-				${isImg
-					? `<img class="jmlt-file-preview-img" alt="${escapeHTMLFileName(transfer.fileName)}" src="${url}">`
-					: `<div class="jmlt-file-preview-generic"><div class="file-icon">📄</div><div>${escapeHTMLFileName(transfer.fileName)}</div></div>`}
+				${bodyHtml}
 				<div class="jmlt-file-preview-actions">
 					<button type="button" class="jmlt-file-preview-save">⬇ ${t('file.save', 'Save')}</button>
 					<button type="button" class="jmlt-file-preview-close2">${t('action.close', 'Close')}</button>
 				</div>
 			</div>`;
 		document.body.appendChild(overlay);
+		// PDF render-failure fallback: if the iframe errors, swap in the save
+		// card (the Save button in the actions row stays usable either way).
+		// PDF 渲染失败回退：iframe 报错则换成保存卡（操作行的保存按钮始终可用）。
+		if (kind === 'pdf') {
+			const frame = overlay.querySelector('.jmlt-file-preview-pdf');
+			if (frame) {
+				frame.addEventListener('error', () => {
+					const card = document.createElement('div');
+					card.innerHTML = genericCard;
+					frame.replaceWith(card.firstElementChild)
+				})
+			}
+		}
 		const close = () => {
 			overlay.remove();
 			setTimeout(() => URL.revokeObjectURL(url), 60000);
