@@ -477,6 +477,11 @@ window.addEventListener('DOMContentLoaded', () => {
 				try { history.replaceState(null, '', location.pathname) } catch (_e) { /* keep query */ }
 				if (!hit) return;
 				const payload = await hit.json();
+				// S-4 TTL：SW 写入时内嵌 ts，超过 5 分钟或 ts 畸形一律丢弃
+				//（条目已在上方删除，丢弃即彻底作废）。常量与 sw.js 的
+				// SHARE_TTL_MS 保持一致，两处无法共享模块，改一处必改另一处。
+				if (!payload || typeof payload.ts !== 'number' || !Number.isFinite(payload.ts) ||
+					Date.now() - payload.ts > 5 * 60 * 1000 || Date.now() - payload.ts < -5000) return;
 				let filled = 0;
 				const parts = [];
 				const text = (payload.text || '').trim();
