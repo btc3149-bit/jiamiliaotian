@@ -5,8 +5,17 @@ import {
 } from './util.avatar.js';
 import {
 	roomsData,
-	activeRoomIndex
+	activeRoomIndex,
+	switchRoom
 } from './room.js';
+import {
+	announceLive,
+	searchMessagesAcrossRooms,
+	readerNames,
+	focusIntoModal,
+	restoreModalFocus,
+	handleModalTab
+} from './util.a11yUx.js';
 import {
 	escapeHTML,
 	sanitizeImageSrc,
@@ -85,10 +94,26 @@ export function renderChatArea() {
 		return
 	}
 	chatArea.innerHTML = '';
+	if (roomsData[activeRoomIndex].messages.length === 0) {
+		// Item 47: brand-new room → invite guidance card instead of a blank
+		// pane. The button reuses the existing share modal via the bridge
+		// main.js installs (window.__jmltOpenShare); the card repeats the
+		// share modal's warning that the invite link carries credentials.
+		const card = createElement('div', { class: 'jmlt-empty-room' });
+		card.appendChild(createElement('div', { class: 'jmlt-empty-title' }, t('invite.empty_title', 'No messages yet')));
+		card.appendChild(createElement('div', { class: 'jmlt-empty-body' }, t('invite.empty_body', 'Invite others to this room. The invite link contains the room name and password — share it only with people you trust.')));
+		const inviteBtn = createElement('button', { type: 'button', class: 'jmlt-empty-invite-btn' }, t('invite.empty_btn', 'Invite to Room'));
+		on(inviteBtn, 'click', () => {
+			if (typeof window.__jmltOpenShare === 'function') window.__jmltOpenShare();
+		});
+		card.appendChild(inviteBtn);
+		chatArea.appendChild(card);
+		return
+	}
 	bulkRenderDepth++;
 	try {
 		roomsData[activeRoomIndex].messages.forEach(m => {
-			const meta = { id: m.id, reactions: m.reactions, mentions: m.mentions, mentionsMe: m.mentionsMe, quote: m.quote, ttl: m.ttl, edited: m.edited, deleted: m.deleted, burned: m.burned, read: m.read };
+			const meta = { id: m.id, reactions: m.reactions, mentions: m.mentions, mentionsMe: m.mentionsMe, quote: m.quote, ttl: m.ttl, edited: m.edited, deleted: m.deleted, burned: m.burned, read: m.read, readBy: m.readBy };
 			if (m.type === 'me') addMsg(m.text, true, m.msgType || 'text', m.timestamp, meta);
 			else if (m.type === 'system') addSystemMsg(m.text, true, m.timestamp);
 			else addOtherMsg(m.text, m.userName, m.avatar, true, m.msgType || 'text', m.timestamp, meta)
@@ -97,8 +122,7 @@ export function renderChatArea() {
 		bulkRenderDepth--;
 	}
 	// #15: the single scroll write for the whole replay.
-	chatArea.scrollTop = chatArea.scrollHeight;
-}
+	chatArea.scrollTop = chatArea.scrollHeight;}
 
 // Add a message to the chat area
 // 添加消息到聊天区域
@@ -160,8 +184,7 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 			const messageText = text.text ? textToHTML(text.text) : '';
 			const imageElements = text.images.map(imgData => {
 				const safeImgSrc = escapeHTML(sanitizeImageSrc(imgData));
-				return `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
-			}).join('');
+				return `<img src="${safeImgSrc}" alt="${escapeHTML(t('a11y.shared_image', 'Shared image'))}" class="bubble-img">`;			}).join('');
 					if (messageText && imageElements) {
 				// Mixed content: text + images
 				contentHtml = `<div class="mixed-content">
@@ -184,17 +207,16 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 				// Mixed content: text + image
 				contentHtml = `<div class="mixed-content">
 					<div class="message-text">${messageText}</div>
-					<img src="${safeImgSrc}" alt="image" class="bubble-img">
+					<img src="${safeImgSrc}" alt="${escapeHTML(t('a11y.shared_image', 'Shared image'))}" class="bubble-img">
 				</div>`;
 			} else {
 				// Image only
-				contentHtml = `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
+				contentHtml = `<img src="${safeImgSrc}" alt="${escapeHTML(t('a11y.shared_image', 'Shared image'))}" class="bubble-img">`;
 			}
 		} else {
 			// Legacy format: plain image data URL
 			const safeImgSrc = escapeHTML(sanitizeImageSrc(text));
-			contentHtml = `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
-		}
+			contentHtml = `<img src="${safeImgSrc}" alt="${escapeHTML(t('a11y.shared_image', 'Shared image'))}" class="bubble-img">`;		}
 	} else if (msgType === 'file' || msgType === 'file_private') {
 		// Handle file messages
 		contentHtml = renderFileMessage(text, true);
@@ -220,11 +242,8 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 	const burnMark = (meta && meta.ttl) ? `<span class="msg-burn">🔥${meta.ttl < 60 ? meta.ttl + 's' : (meta.ttl / 60) + 'm'}</span>` : '';
 	// P1-C: read-receipt chip on own bubbles, revealed when peers confirm.
 	// P1-C: 自己气泡上的已读徽标，对端确认后亮起。
-	const readChipHtml = (meta && meta.read)
-		? `<span class="msg-read">✓✓</span>`
-		: (safeMid ? `<span class="msg-read" hidden>✓✓</span>` : '');
-	const div = createElementHTML('div', {
-		class: className,
+	const readChipHtml = buildReadChipHtml(meta, safeMid);
+	const div = createElementHTML('div', {		class: className,
 		...(safeMid ? { 'data-mid': safeMid } : {})
 	}, `<span class="bubble-content">${quoteHtml}${contentHtml}${editedMark}</span>${actionsHtml}<span class="bubble-meta">${burnMark}${time}${readChipHtml}</span>`);
 	chatArea.appendChild(div);
@@ -259,8 +278,7 @@ export function addOtherMsg(msg, userName = '', _avatar = '', isHistory = false,
 			const messageText = msg.text ? textToHTML(msg.text) : '';
 			const imageElements = msg.images.map(imgData => {
 				const safeImgSrc = escapeHTML(sanitizeImageSrc(imgData));
-				return `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
-			}).join('');
+				return `<img src="${safeImgSrc}" alt="${escapeHTML(t('a11y.shared_image', 'Shared image'))}" class="bubble-img">`;			}).join('');
 					if (messageText && imageElements) {
 				// Mixed content: text + images
 				contentHtml = `<div class="mixed-content">
@@ -283,17 +301,16 @@ export function addOtherMsg(msg, userName = '', _avatar = '', isHistory = false,
 				// Mixed content: text + image
 				contentHtml = `<div class="mixed-content">
 					<div class="message-text">${messageText}</div>
-					<img src="${safeImgSrc}" alt="image" class="bubble-img">
+					<img src="${safeImgSrc}" alt="${escapeHTML(t('a11y.shared_image', 'Shared image'))}" class="bubble-img">
 				</div>`;
 			} else {
 				// Image only
-				contentHtml = `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
+				contentHtml = `<img src="${safeImgSrc}" alt="${escapeHTML(t('a11y.shared_image', 'Shared image'))}" class="bubble-img">`;
 			}
 		} else {
 			// Legacy format: plain image data URL
 			const safeImgSrc = escapeHTML(sanitizeImageSrc(msg));
-			contentHtml = `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
-		}
+			contentHtml = `<img src="${safeImgSrc}" alt="${escapeHTML(t('a11y.shared_image', 'Shared image'))}" class="bubble-img">`;		}
 	} else if (msgType === 'file' || msgType === 'file_private') {
 		// Handle file messages
 		contentHtml = renderFileMessage(msg, false);
@@ -352,8 +369,12 @@ export function addOtherMsg(msg, userName = '', _avatar = '', isHistory = false,
 	}
 	chatArea.appendChild(bubbleWrap);
 	if (safeMid) renderReactions(safeMid);
-	scrollChatToBottom(chatArea)
-}
+	if (!isHistory) {
+		// Item 41: throttled live-region announcement (sender only, no content).
+		announceLive(t('a11y.new_message', 'New message from {name}').replace('{name}', userName), 'message')
+	}
+	chatArea.scrollTop = chatArea.scrollHeight
+	scrollChatToBottom(chatArea)}
 
 // Add a system message to the chat area
 // 添加系统消息到聊天区域
@@ -416,12 +437,25 @@ export function setupImagePreview() {
 // 显示图片模态框
 export function showImageModal(src) {
 	const modal = createElementHTML('div', {
-		class: 'img-modal-bg'
-	}, `<div class="img-modal-blur"></div><div class="img-modal-content img-modal-content-overflow"><img src="${escapeHTML(sanitizeImageSrc(src))}"class="img-modal-img"/><span class="img-modal-close">&times;</span></div>`);
-	document.body.appendChild(modal);
-	on($('.img-modal-close', modal), 'click', () => modal.remove());
+		class: 'img-modal-bg',
+		role: 'dialog',
+		'aria-modal': 'true',
+		'aria-label': t('a11y.shared_image', 'Shared image')
+	}, `<div class="img-modal-blur"></div><div class="img-modal-content img-modal-content-overflow"><img src="${escapeHTML(sanitizeImageSrc(src))}"class="img-modal-img" alt="${escapeHTML(t('a11y.shared_image', 'Shared image'))}"/><span class="img-modal-close" role="button" tabindex="0" aria-label="${escapeHTML(t('action.close', 'Close'))}">&times;</span></div>`);	document.body.appendChild(modal);
+	focusIntoModal(modal);
+	const closeModal = () => {
+		document.removeEventListener('keydown', modalKeyHandler);
+		modal.remove();
+		restoreModalFocus();
+	};
+	const modalKeyHandler = (e) => {
+		if (e.key === 'Escape') closeModal();
+		else handleModalTab(modal, e);
+	};
+	document.addEventListener('keydown', modalKeyHandler);
+	on($('.img-modal-close', modal), 'click', closeModal);
 	on(modal, 'click', (e) => {
-		if (e.target === modal) modal.remove()
+		if (e.target === modal) closeModal()
 	});
 	const img = $('img', modal);
 	let scale = 1;
@@ -936,7 +970,9 @@ export function updateTypingIndicator(usernames) {
 	// HTML interpolation (same rule as member list).
 	const names = usernames.slice(0, 3).map(u => escapeHTML(u || '')).join(', ');
 	const more = usernames.length > 3 ? t('ui.typing_more', ' and others') : '';
-	el.innerHTML = `<span class="typing-dots"><i></i><i></i><i></i></span><span class="typing-names">${names}${more}</span> ${t('ui.typing', 'is typing…')}`
+	el.innerHTML = `<span class="typing-dots"><i></i><i></i><i></i></span><span class="typing-names">${names}${more}</span> ${t('ui.typing', 'is typing…')}`;
+	// Item 41: throttled live-region announcement for screen readers.
+	announceLive(usernames.slice(0, 3).join(', ') + ' ' + t('ui.typing', 'is typing…'), 'typing')
 }
 
 // Draft cluster lives in chat.draft.js — forwarded exports (item 48).
@@ -1208,13 +1244,86 @@ function flushReadReceipts() {
 	} catch (_e) { /* receipt sending is best-effort */ }
 }
 
+// Item 42: read chip with reader count. The chip title lists reader names
+// (locally aggregated from E2EE receipts — see room.js handleClientReadReceipt);
+// clicking opens the full list. Names are remote-controlled → escaped.
+function buildReadChipHtml(meta, safeMid) {
+	if (!safeMid) return '';
+	const rd = roomsData[activeRoomIndex];
+	const readers = (meta && Array.isArray(meta.readBy)) ? meta.readBy : [];
+	const names = readerNames({ readBy: readers }, rd && rd.userMap, t('ui.anonymous', 'Anonymous'));
+	const label = names.length
+		? escapeHTML(t('receipt.read_by', 'Read by {names}').replace('{names}', names.join(', ')))
+		: '';
+	const count = readers.length > 1 ? ' ' + readers.length : '';
+	return (meta && (meta.read || readers.length))
+		? `<span class="msg-read" role="button" tabindex="0" data-read-chip="${safeMid}" title="${label}" aria-label="${label}">✓✓${count}</span>`
+		: `<span class="msg-read" data-read-chip="${safeMid}" hidden>✓✓</span>`;
+}
+
+// Re-render one bubble's read chip after a new receipt arrives.
+export function refreshReadChipDom(mid) {
+	const rd = roomsData[activeRoomIndex];
+	if (!rd || !mid) return;
+	const entry = rd.messages.find(m => m.id === mid);
+	const chip = document.querySelector('#chat-area [data-mid="' + mid + '"] .msg-read');
+	if (!entry || !chip) return;
+	const tmp = document.createElement('div');
+	tmp.innerHTML = buildReadChipHtml({ read: entry.read, readBy: entry.readBy }, mid);
+	const fresh = tmp.firstChild;
+	if (fresh) chip.replaceWith(fresh);
+}
+
+// Click / Enter on a read chip → who-read list (author-only, local data).
+export function setupReadReceiptUI() {
+	const area = $id('chat-area');
+	if (!area || area.dataset.readUi === '1') return;
+	area.dataset.readUi = '1';
+	const open = (chip) => {
+		const mid = chip.getAttribute('data-read-chip');
+		const rd = roomsData[activeRoomIndex];
+		const entry = rd && rd.messages.find(m => m.id === mid);
+		if (!entry) return;
+		const names = readerNames(entry, rd.userMap, t('ui.anonymous', 'Anonymous'));
+		if (!names.length) return;
+		const prev = document.querySelector('.jmlt-readers-pop');
+		if (prev) prev.remove();
+		const pop = createElement('div', { class: 'jmlt-readers-pop', role: 'dialog', 'aria-modal': 'true', 'aria-label': t('receipt.title', 'Read by') });
+		const title = createElement('div', { class: 'jmlt-readers-title' }, t('receipt.title', 'Read by'));
+		pop.appendChild(title);
+		for (const n of names) pop.appendChild(createElement('div', { class: 'jmlt-readers-name' }, String(n)));
+		const closeBtn = createElement('button', { type: 'button', class: 'jmlt-readers-close' }, t('action.close', 'Close'));
+		pop.appendChild(closeBtn);
+		document.body.appendChild(pop);
+		focusIntoModal(pop);
+		const close = () => { pop.remove(); document.removeEventListener('keydown', onKey); restoreModalFocus(); };
+		const onKey = (e) => {
+			if (e.key === 'Escape') close();
+			else handleModalTab(pop, e);
+		};
+		document.addEventListener('keydown', onKey);
+		on(closeBtn, 'click', close);
+	};
+	on(area, 'click', (e) => {
+		const chip = e.target.closest && e.target.closest('[data-read-chip]');
+		if (chip && !chip.hidden) open(chip);
+	});
+	on(area, 'keydown', (e) => {
+		if ((e.key === 'Enter' || e.key === ' ') && e.target.closest && e.target.closest('[data-read-chip]')) {
+			e.preventDefault();
+			open(e.target.closest('[data-read-chip]'));
+		}
+	});
+}
+
 // Reveal the ✓✓ chip on one of my own bubbles when a peer confirms reading it.
 // 对端确认已读后，点亮自己气泡上的 ✓✓ 徽标。
 export function markMessageReadDom(mid) {
 	const id = String(mid || '');
 	if (!/^[A-Za-z0-9]{8,32}$/.test(id)) return;
 	const chip = document.querySelector('#chat-area [data-mid="' + id + '"] .msg-read');
-	if (chip) chip.hidden = false
+	if (chip) chip.hidden = false;
+	refreshReadChipDom(id)
 }
 
 // Search cluster lives in chat.search.js — forwarded exports (item 48).

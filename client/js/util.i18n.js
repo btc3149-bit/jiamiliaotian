@@ -74,6 +74,46 @@ const LANGUAGES = {
 			'search.forwarded': 'Forwarded {n} message(s) to #{room}',
 			'search.no_other_rooms': 'Open another room first to forward messages.',
 			'search.private_skipped': '{n} private message(s) skipped',
+			'a11y.message_input': 'Message input',
+			'a11y.new_message': 'New message from {name}',
+			'a11y.shared_image': 'Shared image',
+			'a11y.send': 'Send message',
+			'a11y.search_btn': 'Search messages',
+			'a11y.voice_btn': 'Record voice message',
+			'a11y.call_btn': 'Voice call',
+			'a11y.video_btn': 'Video call',
+			'a11y.burn_btn': 'Burn timer',
+			'mention.none': 'No matching member',
+			'search.cross_placeholder': 'Search all loaded rooms…',
+			'search.scope': 'Local search only: covers messages loaded on this device (open rooms + local history kept here). The server stores nothing and cannot search.',
+			'search.filter_sender': 'Sender',
+			'search.filter_type': 'Type',
+			'search.type_all': 'All types',
+			'search.type_text': 'Text',
+			'search.type_image': 'Image',
+			'search.type_file': 'File',
+			'search.type_voice': 'Voice',
+			'search.in_room': 'in #{room}',
+			'receipt.read_by': 'Read by {names}',
+			'receipt.title': 'Read by',
+			'shortcut.title': 'Keyboard Shortcuts',
+			'shortcut.search': 'Search messages',
+			'shortcut.prev_room': 'Previous room',
+			'shortcut.next_room': 'Next room',
+			'shortcut.help': 'This help',
+			'shortcut.open_help': 'Keyboard shortcuts',
+			'invite.empty_title': 'No messages yet',
+			'invite.empty_body': 'Invite others to this room. The invite link contains the room name and password — share it only with people you trust.',
+			'invite.empty_btn': 'Invite to Room',
+			'pw.strength': 'Password strength',
+			'pw.empty': 'No password',
+			'pw.weak': 'Weak',
+			'pw.fair': 'Fair',
+			'pw.good': 'Good',
+			'pw.strong': 'Strong',
+			'pw.generate': 'Generate strong password',
+			'pw.weak_confirm': 'This room password is weak. The password is the only thing protecting the room content — anyone who knows the room name and guesses this password can read everything. Continue anyway?',
+			'pw.empty_confirm': 'No password set: anyone who knows the room name can read this room’s messages. Continue without a password?',
 			'system.queued_offline': 'Offline — message queued and will be sent after reconnect.',
 			'system.queue_flushed': 'Sent {n} queued message(s) after reconnect.',
 			'system.voice_failed': 'Voice recording unavailable ({reason}).',
@@ -390,6 +430,46 @@ const LANGUAGES = {
 			'search.forwarded': '已向 #{room} 转发 {n} 条消息',
 			'search.no_other_rooms': '请先打开另一个房间再转发。',
 			'search.private_skipped': '{n} 条私聊消息已跳过',
+			'a11y.message_input': '消息输入框',
+			'a11y.new_message': '来自 {name} 的新消息',
+			'a11y.shared_image': '分享的图片',
+			'a11y.send': '发送消息',
+			'a11y.search_btn': '搜索消息',
+			'a11y.voice_btn': '录制语音消息',
+			'a11y.call_btn': '语音通话',
+			'a11y.video_btn': '视频通话',
+			'a11y.burn_btn': '阅后即焚定时',
+			'mention.none': '没有匹配的成员',
+			'search.cross_placeholder': '搜索全部已加载房间…',
+			'search.scope': '仅本地搜索：范围是本设备已加载的消息（已打开房间 + 本地保留的历史）。服务器不存任何消息、无法搜索。',
+			'search.filter_sender': '发送者',
+			'search.filter_type': '类型',
+			'search.type_all': '全部类型',
+			'search.type_text': '文本',
+			'search.type_image': '图片',
+			'search.type_file': '文件',
+			'search.type_voice': '语音',
+			'search.in_room': '在 #{room}',
+			'receipt.read_by': '已读：{names}',
+			'receipt.title': '已读名单',
+			'shortcut.title': '键盘快捷键',
+			'shortcut.search': '搜索消息',
+			'shortcut.prev_room': '上一个房间',
+			'shortcut.next_room': '下一个房间',
+			'shortcut.help': '本帮助',
+			'shortcut.open_help': '键盘快捷键',
+			'invite.empty_title': '还没有消息',
+			'invite.empty_body': '邀请其他人加入这个房间。邀请链接包含房间名和密码——只分享给你信任的人。',
+			'invite.empty_btn': '邀请加入房间',
+			'pw.strength': '密码强度',
+			'pw.empty': '未设密码',
+			'pw.weak': '弱',
+			'pw.fair': '一般',
+			'pw.good': '较强',
+			'pw.strong': '强',
+			'pw.generate': '生成强密码',
+			'pw.weak_confirm': '这个房间密码偏弱。密码是保护房间内容的唯一防线——知道房间名并猜中密码的人可以读到全部内容。仍要继续吗？',
+			'pw.empty_confirm': '未设置密码：任何知道房间名的人都能读这个房间的消息。仍要无密码进入吗？',
 			'system.queued_offline': '当前离线——消息已排队，重连后自动发送。',
 			'system.queue_flushed': '重连后已发送 {n} 条排队消息。',
 			'system.voice_failed': '无法录音（{reason}）。',
@@ -784,6 +864,32 @@ export function updateStaticTexts() {
 	const emojiBtn = document.querySelector('.chat-emoji-btn');
 	if (emojiBtn) {
 		emojiBtn.title = t('action.emoji', 'Emoji');
+	}
+
+	// a11y (item 41): toolbar buttons get real aria-labels via t() keys, and
+	// the contenteditable composer is exposed as a textbox to assistive tech.
+	const ariaBtnMap = [
+		['.chat-search-btn', 'a11y.search_btn', 'Search messages'],
+		['.chat-voice-btn', 'a11y.voice_btn', 'Record voice message'],
+		['.chat-call-btn', 'a11y.call_btn', 'Voice call'],
+		['.chat-video-btn', 'a11y.video_btn', 'Video call'],
+		['.chat-burn-btn', 'a11y.burn_btn', 'Burn timer'],
+		['.chat-emoji-btn', 'action.emoji', 'Emoji'],
+		['.chat-attach-btn', 'file.attach_file', 'Attach file'],
+		['.send-message-btn', 'a11y.send', 'Send message']
+	];
+	for (const [sel, key, fallback] of ariaBtnMap) {
+		const b = document.querySelector(sel);
+		if (b) {
+			b.setAttribute('aria-label', t(key, fallback));
+			if (!b.title) b.title = t(key, fallback);
+		}
+	}
+	const composer = document.querySelector('.input-message-input-init');
+	if (composer) {
+		composer.setAttribute('role', 'textbox');
+		composer.setAttribute('aria-multiline', 'true');
+		composer.setAttribute('aria-label', t('a11y.message_input', 'Message input'));
 	}
 		// Update settings button title
 	const settingsBtn = document.getElementById('settings-btn');
