@@ -9,7 +9,7 @@
     "node": ">=22 <23"
   },
   "dependencies": {
-    "bufferutil": "^4.0.1",
+    "bufferutil": "^4.2.0",
     "utf-8-validate": "^5.0.2",
     "ws": "^8.23.0"
   }
