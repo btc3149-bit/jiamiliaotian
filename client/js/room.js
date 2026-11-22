@@ -480,9 +480,7 @@ export function handleClientLeft(idx, clientId) {
 	if (rd.statusMap) delete rd.statusMap[clientId];
 	// v1.5.0 #16: if the departing member was on a call with us, end it.
 	// v1.5.0 #16：离开成员若是通话对端，立即结束通话。
-	if (window.__jmltOnCallPeerLeft) {
-		try { window.__jmltOnCallPeerLeft(clientId) } catch (_e) { /* best-effort */ }
-	}
+	try { callBridge('onCallPeerLeft', clientId) } catch (_e) { /* best-effort */ }
 	clearTypingUser(idx, clientId); // P2: don't let a departed member's typing state linger
 	if (activeRoomIndex === idx) {
 		renderUserList(false);

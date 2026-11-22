@@ -262,7 +262,7 @@ registerBridge('openLoginPrefill', openLoginPrefill);
 // 通话管理器装在 main.js（信令回调经 room.js 的 window 钩子转发进来）。
 let callManager = null;
 registerBridge('onCallSignal', (r) => { if (callManager) callManager.handleSignal(r) });
-window.__jmltOnCallPeerLeft = (clientId) => { if (callManager) callManager.handlePeerLeft(clientId) };
+registerBridge('onCallPeerLeft', (clientId) => { if (callManager) callManager.handlePeerLeft(clientId) });
 window.__jmltUpdateCallBtn = () => {
 	// v1.9.2: two call buttons — 📞 voice / 🎥 video — both gated on having a
 	// private-chat target. / 双通话按钮，均以私聊对象为可见前提。
