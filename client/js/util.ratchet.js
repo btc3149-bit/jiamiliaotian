@@ -117,35 +117,79 @@ export class RatchetGeneration {
 		return { mk, ci };
 	}
 
+	// E-1 (peek/commit): derive the receive message key for chain index `ci`
+	// WITHOUT touching any state. Returns { mk, commit } or null; the caller
+	// must authenticate the frame with mk first and call commit() only on
+	// success — a forged frame then burns nothing (previously recvKeyFor
+	// advanced the chain / consumed keys before AEAD verification, so one
+	// forged frame permanently destroyed the legitimate frame's key).
+	// Derivation runs on a read-only walk of the chain; pending skipped keys
+	// live on the stack and are only written by commit(). commit() is
+	// one-shot (second call is a no-op) and is the single point where the
+	// skipped-cap eviction happens.
+	// E-1（peek/commit）：推导 ci 的接收消息密钥但不改任何状态，返回
+	// { mk, commit } 或 null；调用方须先用 mk 通过 AEAD 验证、成功后才
+	// commit()——伪造帧因此烧不掉任何键（旧 recvKeyFor 在验证前就推进链/
+	// 消费键，一帧伪造即可永久毁掉合法帧的密钥）。推导只读遍历链，待提交
+	// 跳过键在栈上、仅 commit() 写入；commit() 一次性（二次调用 no-op），
+	// 且是跳过键 cap 逐出发生的唯一时点。
+	peekRecvKey(ci, skippedCap = DEFAULT_SKIPPED_CAP) {
+		if (!Number.isInteger(ci) || ci < 0) return null;
+		if (ci < this.recvIndex) return null; // consumed already (or evicted)
+		if (ci - this.recvIndex > RATCHET_MAX_GAP) return null; // absurd gap
+		let chain = this.recvKey; // read-only reference; this.* never mutated here
+		const pending = []; // [ci, mk] skipped keys awaiting commit
+		while (this.recvIndex + pending.length < ci) {
+			pending.push([this.recvIndex + pending.length, messageKeyFrom(chain)]);
+			chain = chainStep(chain);
+		}
+		const mk = messageKeyFrom(chain);
+		const nextKey = chainStep(chain);
+		let done = false;
+		return { mk, commit: () => {
+			if (done) return; done = true;
+			for (const [i, k] of pending) this.skipped.set(i, k);
+			this.recvKey = nextKey; this.recvIndex = ci + 1;
+			this.enforceSkippedCap(skippedCap); // cap eviction only on commit
+		} };
+	}
+
+	// E-1: peek at a stored skipped key without consuming it. commit()
+	// deletes it (one-shot, guarded against the entry having been replaced).
+	// E-1：查看一条跳过键但不消费；commit() 才删除（一次性，且校验条目
+	// 未被替换）。
+	peekSkipped(ci) {
+		const mk = this.skipped.get(ci);
+		if (!mk) return null;
+		let done = false;
+		return { mk, commit: () => {
+			if (done) return; done = true;
+			if (this.skipped.get(ci) === mk) this.skipped.delete(ci);
+		} };
+	}
+
 	// Get the receive message key for chain index `ci`. In-order → derive and
 	// advance; ahead → advance unconditionally (buffering at most skippedCap
 	// keys — beyond the cap messages are lost but the chain stays alive);
 	// behind → skipped store. Never let a huge gap wedge the chain.
+	// Compatibility wrapper: peek + immediate commit (pre-E-1 behaviour).
 	// 取接收方向 ci 的消息密钥。按序→派生推进；超前→无条件推进（至多缓冲
 	// skippedCap 条——超出的消息丢弃但链保持活性）；落后→查跳过键表。
+	// 兼容包装：peek + 立即 commit（E-1 之前的行为）。
 	recvKeyFor(ci, skippedCap = DEFAULT_SKIPPED_CAP) {
-		if (!Number.isInteger(ci) || ci < 0) return null;
-		if (ci < this.recvIndex) return null; // consumed already (or evicted)
-		if (ci - this.recvIndex > RATCHET_MAX_GAP) return null; // absurd gap
-		while (this.recvIndex < ci) {
-			const mk = messageKeyFrom(this.recvKey);
-			this.skipped.set(this.recvIndex, mk);
-			this.recvKey = chainStep(this.recvKey);
-			this.recvIndex++;
-		}
-		// ci === recvIndex
-		const mk = messageKeyFrom(this.recvKey);
-		this.recvKey = chainStep(this.recvKey);
-		this.recvIndex++;
-		this.enforceSkippedCap(skippedCap);
-		return mk;
+		const peeked = this.peekRecvKey(ci, skippedCap);
+		if (!peeked) return null;
+		peeked.commit();
+		return peeked.mk;
 	}
 
-	// Consume a stored skipped key (one-shot). 消费一条跳过键（一次性）。
+	// Consume a stored skipped key (one-shot). Compatibility wrapper:
+	// peek + immediate commit. 消费一条跳过键（一次性）。兼容包装。
 	takeSkipped(ci) {
-		const mk = this.skipped.get(ci);
-		if (mk) this.skipped.delete(ci);
-		return mk || null;
+		const peeked = this.peekSkipped(ci);
+		if (!peeked) return null;
+		peeked.commit();
+		return peeked.mk;
 	}
 
 	skippedCount() {
@@ -256,22 +300,33 @@ export class PeerRatchet {
 		if (!Number.isInteger(gen) || !Number.isInteger(ci) || gen < 1 || ci < 0) return null;
 		const genState = this.gens.get(gen);
 		if (!genState) return null; // unknown/future generation (offer not arrived)
-		let mk;
-		if (ci >= genState.recvIndex) {
-			mk = genState.recvKeyFor(ci, this.skippedCap);
-		} else {
-			mk = genState.takeSkipped(ci); // replayed/out-of-order old message
-		}
-		if (!mk) return null; // consumed, evicted, or gap too large
+		// E-1: cheap structural validation BEFORE any key derivation, so
+		// garbage frames are rejected without touching chain state.
+		// E-1：先做廉价结构校验（在任何密钥推导之前），垃圾帧不触碰链状态。
+		const iv = new Uint8Array(Buffer.from(parts[3], 'base64'));
+		const sealed = new Uint8Array(Buffer.from(parts[4], 'base64'));
+		if (iv.length !== 12 || sealed.length < 17) return null;
+		// E-1: peek only — no state changes until AEAD verification succeeds.
+		// E-1：只 peek——AEAD 验证成功前零状态变化。
+		const peeked = (ci >= genState.recvIndex)
+			? genState.peekRecvKey(ci, this.skippedCap)
+			: genState.peekSkipped(ci); // replayed/out-of-order old message
+		if (!peeked) return null; // consumed, evicted, or gap too large
 		let plain;
 		try {
-			plain = new ChaCha20Poly1305(mk).open(
-				new Uint8Array(Buffer.from(parts[3], 'base64')),
-				new Uint8Array(Buffer.from(parts[4], 'base64')));
+			plain = new ChaCha20Poly1305(peeked.mk).open(iv, sealed);
 		} catch (_e) {
-			return null;
+			return null; // handle dropped; state untouched
 		}
-		if (!plain) return null; // AEAD auth failure (tamper)
+		if (!plain) return null; // AEAD auth failure (tamper); state untouched
+		// Auth tag verified ⇒ the frame provably came from the key holder, so
+		// consuming the index is correct even if the payload JSON is corrupt
+		// (a sender bug must not leave an authenticated frame replayable).
+		// Commit BEFORE JSON.parse.
+		// 标签已通过 ⇒ 该帧确为持钥对端所发，消费序号成立；即使 JSON 损坏
+		// （发送端 bug）也不应把已认证帧的键留成可重放状态。故先 commit、
+		// 后 JSON.parse。
+		peeked.commit();
 		try {
 			return JSON.parse(Buffer.from(plain).toString('utf8'));
 		} catch (_e) {
