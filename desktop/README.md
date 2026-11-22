@@ -38,6 +38,36 @@ npx tauri dev
 `.github/workflows/desktop.yml`：手动触发或推 `v*` tag → 三平台构建 → artifacts 上传。
 macOS 产物为 ad-hoc 签名（未加入 Apple 开发者计划），首次打开需右键 → 打开。
 
+## 下载校验（SHA-256 + 构建来源证明）
+
+tag 发布时，每个平台的安装包都附带一份 `SHA256SUMS-<平台>.txt`，且产物带有
+GitHub 构建来源证明（artifact attestation，无自持签名密钥，由 GitHub 的
+Sigstore 身份签发）。安装前建议校验：
+
+```bash
+# 1. 校验文件完整性（与安装包放在同一目录执行）
+sha256sum -c SHA256SUMS-windows.txt        # Windows(Git Bash)/Linux 改对应文件名
+shasum -a 256 -c SHA256SUMS-macos-arm64.txt # macOS
+
+# 2. 验证构建来源（需 GitHub CLI 并登录）
+gh attestation verify <安装包文件> --owner btc3149-bit
+```
+
+## 未签名安装包警告与绕过（三平台）
+
+桌面安装包**未购买代码签名证书**：Windows 未签名、macOS 仅 ad-hoc 签名、
+未做 Apple 公证。首次安装/打开时系统会报警，这是预期行为，按下面步骤绕过即可
+（前提：安装包来自本仓库的 GitHub Release 且已通过上面的校验）：
+
+- **Windows（SmartScreen）**：双击安装包后出现「Windows 已保护你的电脑」→
+  点「更多信息」→「仍要运行」。
+- **macOS（Gatekeeper）**：提示「无法打开，因为它来自身份不明的开发者」或
+  「已损坏」→ 在 Finder 里右键（或 Control+点击）应用 →「打开」→ 再点「打开」；
+  或终端执行 `xattr -dr com.apple.quarantine /Applications/jiamiliaotian.app`
+  去除隔离属性。
+- **Linux**：`.deb` 用 `sudo dpkg -i <文件>` 或软件中心安装，无签名拦截；
+  `.AppImage` 需先 `chmod +x <文件>` 赋予执行权限再运行。
+
 # 移动端脚手架 / Mobile (Tauri 2)
 
 Tauri 2 同一代码库可出 Android/iOS。**注意：移动端构建无法在 CI 里完成签名/上架，需要本机 SDK。**

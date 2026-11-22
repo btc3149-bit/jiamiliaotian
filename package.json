@@ -7,9 +7,9 @@
     "build": "vite build",
     "icons": "node scripts/gen-icons.mjs",
     "test": "node scripts/run-tests.mjs",
-    "dev": " wrangler dev",
-    "deploy": " wrangler deploy",
-    "publish": " wrangler publish",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "publish": "wrangler deploy",
     "build:docker": "vite build"
   },
   "repository": {
