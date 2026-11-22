@@ -20,7 +20,7 @@ import {
 	markMessageReadDom
 } from './chat.js';
 import { reportPushSubscription } from './util.push.js';
-import { callBridge } from './util.bridge.js';
+import { callBridge, hasBridge } from './util.bridge.js';
 import { selectReplayable, dedupeReplayBatch } from './util.validate.js';
 // v1.2.0 #11: offline send queue flush
 import { flushSendQueue } from './util.sendQueue.js';
@@ -759,8 +759,8 @@ export function handleClientMessage(idx, msg) {
 
 	// Only add message to chat display if it's for the active room
 	if (activeRoomIndex === idx) {
-		if (window.addOtherMsg) {
-			window.addOtherMsg(msg.data, realUserName, realUserName, false, msgType, null, {
+		if (hasBridge('addOtherMsg')) {
+			callBridge('addOtherMsg', msg.data, realUserName, realUserName, false, msgType, null, {
 				id: msg.id || null,
 				mentions: Array.isArray(msg.mentions) ? msg.mentions : [],
 				mentionsMe: mentionsMe,

@@ -175,7 +175,7 @@ updateStaticTexts();
 // 把一些函数挂载到 window 对象上供其他模块使用
 // Expose functions to the global window object for accessibility
 registerBridge('addSystemMsg', addSystemMsg);
-window.addOtherMsg = addOtherMsg;
+registerBridge('addOtherMsg', addOtherMsg);
 window.joinRoom = joinRoom;
 window.notifyMessage = notifyMessage;
 window.setupEmojiPicker = setupEmojiPicker;

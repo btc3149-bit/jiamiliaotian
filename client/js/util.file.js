@@ -810,8 +810,8 @@ function handleFileStart(message, isPrivate, roomIdx) {
 		if (hasBridge('addSystemMsg')) {
 			callBridge('addSystemMsg', t('system.file_too_large_incoming', 'Refused "{name}": {size} exceeds this device\'s transfer limit ({limit}).').replace('{name}', fileName || '').replace('{size}', formatFileSize(Math.max(compressedSize || 0, originalSize || 0))).replace('{limit}', formatFileSize(MAX_TRANSFER_BYTES)), true)
 		}
-		if (window.addOtherMsg) {
-			window.addOtherMsg({
+		if (hasBridge('addOtherMsg')) {
+			callBridge('addOtherMsg', {
 				type: 'file',
 				fileId,
 				fileName: isArchive ? `${fileCount} files` : fileName,
@@ -846,7 +846,7 @@ function handleFileStart(message, isPrivate, roomIdx) {
 	window.fileTransfers.set(fileId, fileTransfer);
 	
 	// 添加文件消息到聊天
-	if (window.addOtherMsg) {
+	if (hasBridge('addOtherMsg')) {
 		let displayData;
 		if (isArchive) {
 			displayData = {
@@ -870,7 +870,7 @@ function handleFileStart(message, isPrivate, roomIdx) {
 			};
 		}
 		
-		window.addOtherMsg(displayData, userName, userName, false, isPrivate ? 'file_private' : 'file');
+		callBridge('addOtherMsg', displayData, userName, userName, false, isPrivate ? 'file_private' : 'file');
 	}
 }
 
