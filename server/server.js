@@ -125,7 +125,12 @@ wss.on('connection', (connection) => {
 
 
 
-	connection.on('message', (message) => {
+	connection.on('message', (data, isBinary) => {
+
+		// ws >= 8 delivers text frames as Buffer (ws 7 gave strings). Convert
+		// once at the door so every check below keeps its string semantics.
+		// ws 8 起文本帧以 Buffer 传入，进门统一转字符串，下游逻辑不变（K-2）。
+		const message = isBinary ? '' : data.toString();
 
 		if (
 			!isString(message) ||

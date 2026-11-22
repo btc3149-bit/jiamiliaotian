@@ -17,6 +17,7 @@ function check(name, cond) {
 const zh = fs.readFileSync(new URL('./README.md', import.meta.url), 'utf8');
 const en = fs.readFileSync(new URL('./README_EN.md', import.meta.url), 'utf8');
 const rules = fs.readFileSync(new URL('./RULES.md', import.meta.url), 'utf8');
+const dockerfile = fs.readFileSync(new URL('./Dockerfile', import.meta.url), 'utf8');
 
 console.log('=== test-docs: key derivation formula (D-1) ===');
 check('zh formula uses PBKDF2-SHA256', zh.includes('PBKDF2-SHA256(房间密码'));
@@ -45,6 +46,13 @@ check('en README discloses legacy replay scope', en.includes('Scope of Replay Pr
 
 console.log('=== test-docs: default server attribution (D-4) ===');
 check('zh README attributes default server domain', zh.includes('chat.68626.us.ci') && zh.includes('项目方自有部署'));
+
+console.log('=== test-docs: docker security headers (K-1, PR-2) ===');
+check('docker CSP has media-src with data:', dockerfile.includes("media-src 'self' data: blob:"));
+check('docker Permissions-Policy allows self camera/mic', dockerfile.includes('camera=(self), microphone=(self)'));
+const cspLine = (dockerfile.match(/add_header Content-Security-Policy "[^"]*"/) || [''])[0];
+check('docker connect-src has no bare https:', !!cspLine && !/connect-src[^;"]*\bhttps:/.test(cspLine));
+check('zh README carries TLS/HSTS proxy statement', zh.includes('Strict-Transport-Security') && zh.includes('TLS 终结'));
 
 console.log(`\ntest-docs: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);
