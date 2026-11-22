@@ -52,7 +52,7 @@
 
 ### 房间密码机制
 
-房间密码作为**密钥派生因子**参与端到端加密：`最终共享密钥 = ECDH_共享密钥 XOR SHA256(房间密码)`
+房间密码作为**密钥派生因子**参与端到端加密：`最终共享密钥 = ECDH_共享密钥 XOR PBKDF2-SHA256(房间密码, 盐 = 'nodecrypt:v2:' + 房间名, 迭代 200000 次)`（输出 256 位）
 
 - **密码错误隔离**：不同密码的房间无法解密彼此的消息
 - **服务器盲区**：服务器永远无法获知房间密码
@@ -106,8 +106,8 @@ sequenceDiagram
     S->>C: 转发其他客户端的公钥
     
     Note over C,O: 阶段5: 密码增强密钥派生
-    Note over C: 客户端密钥 = ECDH_Curve25519(自己私钥, 对方公钥) XOR SHA256(密码)
-    Note over O: 客户端密钥 = ECDH_Curve25519(自己私钥, 对方公钥) XOR SHA256(密码)
+    Note over C: 客户端密钥 = ECDH_Curve25519(自己私钥, 对方公钥) XOR PBKDF2-SHA256(密码, 'nodecrypt:v2:'+房间名, 200k)
+    Note over O: 客户端密钥 = ECDH_Curve25519(自己私钥, 对方公钥) XOR PBKDF2-SHA256(密码, 'nodecrypt:v2:'+房间名, 200k)
     
     Note over C,O: 阶段6: 身份验证
     C->>S: 用户名 (用客户端密钥ChaCha20加密)
@@ -157,7 +157,7 @@ sequenceDiagram
 
 ## 📄 开源协议
 
-本项目采用 ISC 开源协议。
+本项目采用 AGPL-3.0 开源协议，详见文末 License 节。
 
 ## ⚠️ 免责声明
 

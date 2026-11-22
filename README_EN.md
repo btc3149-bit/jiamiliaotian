@@ -55,7 +55,7 @@ Jiamiliaotian is a truly end-to-end encrypted chat system that implements a comp
 
 ### Room Password Mechanism
 
-Room passwords serve as **key derivation factors** in end-to-end encryption: `Final Shared Key = ECDH_Shared_Key XOR SHA256(Room Password)`
+Room passwords serve as **key derivation factors** in end-to-end encryption: `Final Shared Key = ECDH_Shared_Key XOR PBKDF2-SHA256(Room Password, salt = 'nodecrypt:v2:' + Room Name, 200,000 iterations)` (256-bit output)
 
 - **Password Error Isolation**: Rooms with different passwords cannot decrypt each other's messages
 - **Server Blind Spot**: The server can never know the room password
@@ -108,8 +108,8 @@ sequenceDiagram
     S->>C: Forward other clients' public keys
     
     Note over C,O: Phase 5: Password-Enhanced Key Derivation
-    Note over C: Client Key = ECDH_Curve25519(own private key, other's public key) XOR SHA256(password)
-    Note over O: Client Key = ECDH_Curve25519(own private key, other's public key) XOR SHA256(password)
+    Note over C: Client Key = ECDH_Curve25519(own private key, other's public key) XOR PBKDF2-SHA256(password, 'nodecrypt:v2:'+Room Name, 200k)
+    Note over O: Client Key = ECDH_Curve25519(own private key, other's public key) XOR PBKDF2-SHA256(password, 'nodecrypt:v2:'+Room Name, 200k)
     
     Note over C,O: Phase 6: Identity Authentication
     C->>S: Username (ChaCha20 encrypted with client key)
@@ -160,7 +160,7 @@ Security researchers are welcome to report vulnerabilities and conduct security 
 
 ## 📄 Open Source License
 
-This project uses the ISC open source license.
+This project uses the AGPL-3.0 open source license; see the License section at the end of this document.
 
 ## ⚠️ Disclaimer
 
