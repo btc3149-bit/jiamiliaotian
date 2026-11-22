@@ -178,9 +178,7 @@ registerBridge('addSystemMsg', addSystemMsg);
 registerBridge('addOtherMsg', addOtherMsg);
 registerBridge('joinRoom', joinRoom);
 registerBridge('notifyMessage', notifyMessage);
-window.setupEmojiPicker = setupEmojiPicker;
 registerBridge('handleFileMessage', handleFileMessage);
-window.downloadFile = downloadFile;
 
 // v1.8.3 CSP fix: the deployed worker sets script-src 'self' (no
 // 'unsafe-inline'), so inline event-handler ATTRIBUTES are REFUSED by
