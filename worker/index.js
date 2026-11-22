@@ -386,6 +386,12 @@ export class ChatRoom {  constructor(state, env) {
     connection.addEventListener('close', async (event) => {
       logEvent('close', [clientId, event], 'debug');
 
+      // S-5 parity: cleanupOldConnections may have removed this record
+      // already — return quietly instead of dereferencing a missing record.
+      if (!this.clients[clientId]) {
+        return;
+      }
+
       const channel = this.clients[clientId].channel;
 
       if (channel && this.channels[channel]) {
@@ -733,10 +739,22 @@ export class ChatRoom {  constructor(state, env) {
     }
 
     // 然后一次性移除所有过期客户端
+    // S-5 parity (P-7): also detach from the channel and notify the rest,
+    // otherwise dead members linger in the channel array forever.
+    // 同病同修：删记录前先摘频道并广播，否则死成员永久滞留频道数组。
     for (const clientId of clientsToRemove) {
       try {
         logEvent('connection-seen', clientId, 'debug');
+        const channel = this.clients[clientId].channel;
         this.clients[clientId].connection.close();
+        if (channel && this.channels[channel]) {
+          this.channels[channel].splice(this.channels[channel].indexOf(clientId), 1);
+          if (this.channels[channel].length === 0) {
+            delete this.channels[channel];
+          } else {
+            this.broadcastMemberList(channel);
+          }
+        }
         delete this.clients[clientId];
       } catch (error) {
         logEvent('connection-seen', error, 'error');      }
