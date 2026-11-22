@@ -55,6 +55,9 @@ jobs:
         with:
           workspaces: desktop/src-tauri -> target
 
+      - name: Verify Cargo.lock is present and consistent (--locked)
+        run: cargo fetch --locked --manifest-path desktop/src-tauri/Cargo.toml
+
       - name: Install Linux deps (webkit2gtk)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -114,7 +117,7 @@ jobs:
       # 发布：tag 构建时把本平台安装包挂到对应的 GitHub Release。
       - name: Attach bundles to GitHub Release (Windows)
         if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'windows-latest'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2 (pinned by commit SHA; was floating @v2)
         with:
           fail_on_unmatched_files: false
           files: |
@@ -123,7 +126,7 @@ jobs:
 
       - name: Attach bundles to GitHub Release (macOS)
         if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'macos-latest'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2 (pinned by commit SHA; was floating @v2)
         with:
           fail_on_unmatched_files: false
           files: |
@@ -132,7 +135,7 @@ jobs:
 
       - name: Attach bundles to GitHub Release (Linux)
         if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'ubuntu-22.04'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2 (pinned by commit SHA; was floating @v2)
         with:
           fail_on_unmatched_files: false
           files: |
