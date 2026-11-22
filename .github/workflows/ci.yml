@@ -32,8 +32,24 @@ jobs:
       - name: Crypto interop & tamper tests
         run: npm test
 
+      # Item 22: Worker smoke (Miniflare ships in the tree via wrangler).
+      - name: Worker smoke test (Miniflare)
+        run: node scripts/worker-smoke.mjs
+
+      # Item 2: glob instead of a hand-written list — the old list had
+      # already missed worker/ratelimit.js and client/public/sw.js.
       - name: Syntax check all JS sources
         run: |
-          for f in server/server.js worker/index.js worker/utils.js worker/push.js worker/vapid.js client/js/*.js; do
+          for f in server/*.js worker/*.js client/js/*.js client/public/*.js scripts/*.mjs test-*.mjs; do
             node --check "$f"
           done
+
+  # Item 22: PR-level docker build (build only, never pushes) so a broken
+  # Dockerfile fails the PR instead of surfacing after merge.
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image (no push)
+        run: docker build -t jiamiliaotian-ci .
