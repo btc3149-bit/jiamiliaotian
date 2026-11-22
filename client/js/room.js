@@ -20,6 +20,7 @@ import {
 	markMessageReadDom
 } from './chat.js';
 import { reportPushSubscription } from './util.push.js';
+import { callBridge } from './util.bridge.js';
 import { selectReplayable, dedupeReplayBatch } from './util.validate.js';
 // v1.2.0 #11: offline send queue flush
 import { flushSendQueue } from './util.sendQueue.js';
@@ -282,7 +283,7 @@ export function joinRoom(userName, roomName, password, modal = null, onResult) {
 		onClientSync: (r) => handleClientSync(idx, r),
 		onClientReplay: (r) => handleClientReplay(idx, r),
 		onClientStatus: (r) => handleClientStatus(idx, r),
-		onClientCall: (r) => { if (window.__jmltOnCallSignal) window.__jmltOnCallSignal(r) }
+		onClientCall: (r) => { callBridge('onCallSignal', r) }
 	};
 	const chatInst = new window.NodeCrypt(window.config, callbacks);
 	roomsData[idx].chat = chatInst;
