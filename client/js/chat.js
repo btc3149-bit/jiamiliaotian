@@ -37,6 +37,15 @@ import {
 } from './util.voice.js';
 // v1.3.0 #8: whitelisted markdown rendering for text messages
 import { markdownToHtml } from './util.markdown.js';
+// Item 27: message-list DOM windowing (pure helpers; data array untouched)
+import {
+	initialWindowStart,
+	expandWindowStart,
+	hasEarlierMessages,
+	shouldExpandWindow,
+	windowStartForIndex,
+	clampWindowStart
+} from './util.msgWindow.js';
 
 // v1.2.0 #9: render a validated voice payload as an inline audio player.
 // data: URL is escaped and javascript: stripped (same treatment as images).
@@ -47,6 +56,58 @@ function renderVoiceHtml(v) {
 	return '<span class="voice-wrap"><audio controls preload="metadata" src="' + src + '" class="voice-audio"></audio><span class="voice-dur">🎙 ' + escapeHTML(formatVoiceDuration(v.dur * 1000)) + '</span></span>'
 }
 
+
+// Item 27: DOM windowing state — index into the active room's rd.messages
+// of the first rendered message. Only the DOM is windowed; rd.messages
+// itself is never trimmed (peer replay + local search read it directly).
+// 第 27 条：DOM 窗口状态——当前房间 rd.messages 中第一条已渲染消息的
+// 下标。只裁 DOM 不裁数据（同伴重播与本地搜索直接读 rd.messages）。
+let msgWindowStart = 0;
+let msgWindowExpanding = false;
+
+function renderOneMessage(m) {
+	const meta = { id: m.id, reactions: m.reactions, mentions: m.mentions, mentionsMe: m.mentionsMe, quote: m.quote, ttl: m.ttl, edited: m.edited, deleted: m.deleted, burned: m.burned, read: m.read };
+	if (m.type === 'me') addMsg(m.text, true, m.msgType || 'text', m.timestamp, meta);
+	else if (m.type === 'system') addSystemMsg(m.text, true, m.timestamp);
+	else addOtherMsg(m.text, m.userName, m.avatar, true, m.msgType || 'text', m.timestamp, meta)
+}
+
+// Render rd.messages[msgWindowStart..] — the same per-message code path a
+// full render always used, just bounded to the current window.
+// 渲染 rd.messages[msgWindowStart..]——与全量渲染完全相同的逐条路径，
+// 只是限定在当前窗口内。
+function renderMessageSlice(rd) {
+	const chatArea = $id('chat-area');
+	if (!chatArea || !rd) return;
+	chatArea.innerHTML = '';
+	msgWindowStart = clampWindowStart(msgWindowStart, rd.messages.length);
+	for (let i = msgWindowStart; i < rd.messages.length; i++) renderOneMessage(rd.messages[i])
+}
+
+// Expand the window one page towards older messages, keeping the
+// previously visible content stationary (all growth happens above it).
+// 向更早方向扩一页，并保持原可见内容位置不动（新增内容全在上方）。
+function expandMessageWindow() {
+	const chatArea = $id('chat-area');
+	const rd = roomsData[activeRoomIndex];
+	if (!chatArea || !rd || !hasEarlierMessages(msgWindowStart)) return;
+	msgWindowExpanding = true;
+	const prevHeight = chatArea.scrollHeight;
+	const prevTop = chatArea.scrollTop;
+	msgWindowStart = expandWindowStart(msgWindowStart);
+	renderMessageSlice(rd);
+	chatArea.scrollTop = prevTop + Math.max(0, chatArea.scrollHeight - prevHeight);
+	msgWindowExpanding = false
+}
+
+function ensureMsgWindowScrollHook(chatArea) {
+	if (chatArea.dataset.msgWindowHook === '1') return;
+	chatArea.dataset.msgWindowHook = '1';
+	on(chatArea, 'scroll', () => {
+		if (msgWindowExpanding) return;
+		if (shouldExpandWindow(chatArea.scrollTop, msgWindowStart)) expandMessageWindow()
+	}, { passive: true })
+}
 
 // Render the chat area
 // 渲染聊天区域
@@ -59,15 +120,15 @@ export function renderChatArea() {
 	exitSelectMode();
 	if (activeRoomIndex < 0 || !roomsData[activeRoomIndex]) {
 		chatArea.innerHTML = '';
+		msgWindowStart = 0;
 		return
 	}
-	chatArea.innerHTML = '';
-	roomsData[activeRoomIndex].messages.forEach(m => {
-		const meta = { id: m.id, reactions: m.reactions, mentions: m.mentions, mentionsMe: m.mentionsMe, quote: m.quote, ttl: m.ttl, edited: m.edited, deleted: m.deleted, burned: m.burned, read: m.read };
-		if (m.type === 'me') addMsg(m.text, true, m.msgType || 'text', m.timestamp, meta);
-		else if (m.type === 'system') addSystemMsg(m.text, true, m.timestamp);
-		else addOtherMsg(m.text, m.userName, m.avatar, true, m.msgType || 'text', m.timestamp, meta)
-	})
+	ensureMsgWindowScrollHook(chatArea);
+	const rd = roomsData[activeRoomIndex];
+	// Item 27: a full render always lands on the most recent window;
+	// older messages page in on scroll-up (see expandMessageWindow).
+	msgWindowStart = initialWindowStart(rd.messages.length);
+	renderMessageSlice(rd)
 }
 
 // Add a message to the chat area
@@ -1254,7 +1315,22 @@ function runSearch() {
 
 function jumpToMessage(mid) {
 	if (!mid) return;
-	const el = document.querySelector('#chat-area [data-mid="' + mid + '"]');
+	let el = document.querySelector('#chat-area [data-mid="' + mid + '"]');
+	if (!el) {
+		// Item 27: the target may sit above the rendered window while its
+		// data is still in memory — widen the window to include it instead
+		// of reporting it as not loaded. Only a message absent from
+		// rd.messages entirely keeps the old not-in-view notice.
+		// 第 27 条：目标可能在渲染窗口之上但数据仍在内存——扩窗纳入它，
+		// 而不是误报未加载；只有数据里根本没有的消息才走原提示路径。
+		const rd = roomsData[activeRoomIndex];
+		const idx = rd ? rd.messages.findIndex(m => m && m.id === mid) : -1;
+		if (idx >= 0 && idx < msgWindowStart) {
+			msgWindowStart = windowStartForIndex(idx, msgWindowStart);
+			renderMessageSlice(rd);
+			el = document.querySelector('#chat-area [data-mid="' + mid + '"]')
+		}
+	}
 	if (!el) {
 		addSystemMsg(t('search.not_loaded', 'This message is not in the current view (older than loaded history).'), true);
 		return

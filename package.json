@@ -6,7 +6,7 @@
   "scripts": {
     "build": "vite build",
     "icons": "node scripts/gen-icons.mjs",
-    "test": "node test-crypto.mjs && node test-localHistory.mjs && node test-protocol.mjs && node test-markdown.mjs && node test-export.mjs && node test-migration.mjs && node test-ratchet.mjs && node test-ratchet-integration.mjs && node test-filestream.mjs && node test-v192.mjs && node test-docs.mjs && node test-ratelimit.mjs && node test-server-integration.mjs && node test-push.mjs && node test-share-sw.mjs",
+    "test": "node test-crypto.mjs && node test-localHistory.mjs && node test-protocol.mjs && node test-markdown.mjs && node test-export.mjs && node test-migration.mjs && node test-ratchet.mjs && node test-ratchet-integration.mjs && node test-filestream.mjs && node test-v192.mjs && node test-docs.mjs && node test-ratelimit.mjs && node test-server-integration.mjs && node test-push.mjs && node test-share-sw.mjs && node test-msgwindow.mjs",
     "dev": " wrangler dev",
     "deploy": " wrangler deploy",
     "publish": " wrangler publish",
