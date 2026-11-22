@@ -92,6 +92,8 @@ import {
 } from './chat.js';
 // P1-C: Web Push 房间表访问器注入 / Web Push room-list accessor injection
 import { registerRoomListAccessor } from './util.push.js';
+// Item 48: module-level callback registry replacing window.__jmlt* bridges
+import { registerBridge } from './util.bridge.js';
 
 // v1.1.0 #2: 恐慌清除（双确认）/ Panic wipe (double-confirmed)
 import { panicWipeWithConfirm } from './util.panic.js';
@@ -222,7 +224,7 @@ document.addEventListener('click', (e) => {
 // v1.3.0 #6/#7: settings panel lives in util.settings.js which cannot import
 // the renderers without a cycle — expose hooks instead.
 // v1.3.0 #6/#7：设置面板在 util.settings.js，直接导入渲染器会成环——改挂钩子。
-window.__jmltRenderRooms = () => renderRooms(activeRoomIndex);
+registerBridge('renderRooms', () => renderRooms(activeRoomIndex));
 window.__jmltRenderChat = () => renderChatArea();
 window.__jmltAppendLocalHistory = (rd, entry) => {
 	try { appendLocalHistory(rd, entry) } catch (_e) { /* best-effort */ }

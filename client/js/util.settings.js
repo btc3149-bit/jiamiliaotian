@@ -17,6 +17,7 @@ import { t, setLanguage, initI18n } from './util.i18n.js';
 // P3: dark mode (system-following) + local encrypted history
 import { applyDarkModeSetting } from './util.darkmode.js';
 import { clearAllLocalHistory } from './util.localHistory.js';
+import { callBridge } from './util.bridge.js';
 // P1-C: Web Push (generic, payload-free notifications)
 import { enablePush, disablePush, isPushEnabled, isPushSupported } from './util.push.js';
 // v1.1.0 #2: panic wipe (double-confirmed local data removal)
@@ -42,7 +43,7 @@ function currentRoom() {
 	} catch (_e) { return null }
 }
 function refreshRoomViews() {
-	if (typeof window.__jmltRenderRooms === 'function') window.__jmltRenderRooms();
+	callBridge('renderRooms');
 	if (typeof window.__jmltRenderChat === 'function') window.__jmltRenderChat()
 }
 // Default settings
