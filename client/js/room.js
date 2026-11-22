@@ -640,8 +640,8 @@ export function handleClientMessage(idx, msg) {
 		// v1.2.0 #17：续传请求必须送达发送端，与当前激活房间无关（载荷只有
 		// fileId + 分卷下标，无内容）。
 		if (msgType === 'file_resume_req') {
-			if (window.handleFileMessage) {
-				window.handleFileMessage(msg.data, false, idx)
+			if (hasBridge('handleFileMessage')) {
+				callBridge('handleFileMessage', msg.data, false, idx)
 			}
 			return;
 		}
@@ -681,8 +681,8 @@ export function handleClientMessage(idx, msg) {
 		if (activeRoomIndex === idx) {
 			// If it's the active room, delegate to util.file.js to handle UI and file transfer state.
 			// This applies to all file-related messages (file_start, file_volume, file_end, etc.)
-			if (window.handleFileMessage) {
-				window.handleFileMessage(msg.data, msgType.includes('_private'), idx);
+			if (hasBridge('handleFileMessage')) {
+				callBridge('handleFileMessage', msg.data, msgType.includes('_private'), idx);
 			}
 		} else {
 			// If it's not the active room, only increment unread count for 'file_start' messages.
