@@ -8,6 +8,7 @@
 // - flush 在 onServerSecured（E2EE server-shared 就绪）之后触发
 
 import { t } from './util.i18n.js';
+import { callBridge, hasBridge } from './util.bridge.js';
 
 // Room is fully ready to accept sends: ws open + server-shared key derived.
 // 房间可发送：ws 已开 + server-shared 密钥已就绪。
@@ -57,8 +58,8 @@ export function flushSendQueue(rd) {
 	}
 	rd.sendQueue = mergeFlushResults(rd.sendQueue, failed);
 	rd._flushing = false;
-	if (sent > 0 && window.addSystemMsg) {
-		window.addSystemMsg(t('system.queue_flushed', 'Sent {n} queued message(s) after reconnect.').replace('{n}', String(sent)), true)
+	if (sent > 0 && hasBridge('addSystemMsg')) {
+		callBridge('addSystemMsg', t('system.queue_flushed', 'Sent {n} queued message(s) after reconnect.').replace('{n}', String(sent)), true)
 	}
 	return sent
 }

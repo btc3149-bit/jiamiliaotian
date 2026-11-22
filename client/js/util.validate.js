@@ -4,10 +4,120 @@
 // - 消息 id 白名单、重播条目消毒、水位筛选、去重 —— 协议层信任边界的唯一实现点
 // - room.js 的 sync/rs 处理与 NodeCrypt 的发送端消毒共用这里的规则
 
+// ==================== #30: sync replay suppression ====================
+// Before this, every online peer answered a reconnect 'sync' request
+// immediately — N peers meant N duplicate replay batches (receiver dedupes
+// by id, but the CPU/bandwidth was already spent). Responders now wait a
+// random delay; the requester broadcasts 'sd' (sync-done) once it has a
+// batch, and pending responders suppress theirs. A sole holder is never
+// suppressed to death: suppression ONLY happens on an explicit 'sd' from
+// the requester, and the requester re-asks once if nobody answered.
+// #30：sync 重播抑制。此前每个在线同伴都立即应答重连 'sync'——N 个
+// 同伴 = N 份重复重播（接收端按 id 去重，但 CPU/带宽已花）。现在应答
+// 方先随机延迟；请求方收到批次后广播 'sd'，待应答者据此抑制自己的
+// 应答。唯一持有者不会被抑制死：抑制只发生在请求方显式 'sd' 时，且
+// 请求方无人应答时会兜底再请求一次。
+
+// Random responder delay: 250ms + rand×1500ms ∈ [250, 1750) ms — wide
+// enough that one responder almost always wins and announces 'sd' first,
+// short enough that reconnect backfill still feels instant.
+// 应答随机延迟：250 + rand×1500 ∈ [250, 1750) ms——足够宽到几乎总有
+// 一个应答者先赢并发出 'sd'，又足够短不影响重连补拉体感。
+export function syncReplyDelayMs(rand = Math.random()) {
+	const r = (typeof rand === 'number' && rand >= 0 && rand < 1) ? rand : 0;
+	return 250 + Math.floor(r * 1500);
+}
+
+// Pure suppression gate, keyed by requester clientId. Timers live in the
+// caller (room.js); this class only tracks pending/suppressed state so the
+// decision logic is unit-testable without a DOM or clock.
+// 纯抑制门，按请求方 clientId 分键。定时器在调用方（room.js），本类只
+// 跟踪待应答/已抑制状态，使决策逻辑可无 DOM/时钟单测。
+export class SyncReplyGate {
+	constructor() {
+		this.pending = new Set();
+		this.suppressed = new Set();
+	}
+	// Register a pending reply; returns false if this requester is already
+	// suppressed (a previous 'sd' covers this sync episode).
+	noteRequest(clientId) {
+		if (!clientId) return false;
+		if (this.suppressed.has(clientId)) return false;
+		this.pending.add(clientId);
+		return true;
+	}
+	// The requester announced sync-done: suppress any pending reply to it.
+	// Returns true when a pending reply was actually suppressed.
+	noteSyncDone(clientId) {
+		if (!clientId) return false;
+		this.suppressed.add(clientId);
+		return this.pending.delete(clientId);
+	}
+	// Should a due (delay elapsed) reply to this requester be sent?
+	shouldSend(clientId) {
+		return this.pending.has(clientId) && !this.suppressed.has(clientId);
+	}
+	// The reply went out (or the requester left): clear pending state.
+	noteSettled(clientId) {
+		this.pending.delete(clientId);
+	}
+	// A fresh sync episode for this requester (new request after the
+	// previous episode settled) clears the suppression flag.
+	resetEpisode(clientId) {
+		this.suppressed.delete(clientId);
+		this.pending.delete(clientId);
+	}
+}
+
 // Message id whitelist: 8-32 alphanumeric chars (matches genMessageId output).
 // 消息 id 白名单：8-32 位字母数字。
 export function isValidMid(id) {
 	return typeof id === 'string' && /^[A-Za-z0-9]{8,32}$/.test(id)
+}
+
+// Reaction emoji validation (item 20): a reaction must be EXACTLY ONE
+// grapheme cluster — a ZWJ sequence (e.g. family emoji), a flag pair, or a
+// base + skin-tone / variation-selector sequence all count as one — within
+// a hard length cap. Anything else (plain text, multiple emoji, whitespace,
+// markup) is rejected. Senders validate before sending; receivers
+// re-validate before touching state/DOM (RULES.md invariant 5 posture).
+// 回应 emoji 校验：必须恰好是一个 grapheme 簇（ZWJ 序列、国旗、肤色/变体
+// 选择符序列均算一个），且有硬长度上限；纯文本、多 emoji、空白、标记一律拒绝。
+export const REACTION_EMOJI_MAX_LENGTH = 32; // UTF-16 code units
+export function countGraphemes(s) {
+	if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
+		const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+		let n = 0;
+		for (const _part of seg.segment(s)) { n++; if (n > 1) break }
+		return n
+	}
+	// Fallback (no Intl.Segmenter): count code points, treating ZWJ-joined
+	// sequences, variation selectors, skin-tone modifiers and regional
+	// indicator pairs as part of the preceding grapheme.
+	const cps = Array.from(s);
+	let n = 0;
+	for (let i = 0; i < cps.length; i++) {
+		const cp = cps[i].codePointAt(0);
+		if (cp === 0x200D) { // ZWJ joins the next code point into this grapheme
+			i++;
+			continue
+		}
+		if (cp === 0xFE0E || cp === 0xFE0F) continue; // variation selectors
+		if (cp >= 0x1F3FB && cp <= 0x1F3FF) continue; // skin tones
+		if (cp >= 0xE0020 && cp <= 0xE007F) continue; // tag characters (subdivision flags)
+		if (cp >= 0x1F1E6 && cp <= 0x1F1FF && i + 1 < cps.length) { // flag pair
+			const next = cps[i + 1].codePointAt(0);
+			if (next >= 0x1F1E6 && next <= 0x1F1FF) { n++; i++; continue }
+		}
+		n++
+	}
+	return n
+}
+export function isValidReactionEmoji(e) {
+	if (typeof e !== 'string' || e.length === 0 || e.length > REACTION_EMOJI_MAX_LENGTH) return false;
+	if (/\s/.test(e)) return false;
+	if (!/\p{Emoji}/u.test(e)) return false; // must actually be emoji-ish, not a lone letter/digit
+	return countGraphemes(e) === 1
 }
 
 // Sanitize one wire-format replay entry (from the 'rs' action). Returns a

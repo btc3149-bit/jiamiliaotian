@@ -3,20 +3,20 @@
 
 import {
 	$,
-	$id,
-	createElement,
+	createElementHTML,
 	on,
 	addClass,
 	removeClass
 } from './util.dom.js';
 import { formatFileSize } from './util.file.js';
+import { escapeHTML } from './util.string.js';
 import { t } from './util.i18n.js';
+import { callBridge, hasBridge } from './util.bridge.js';
 
 // File upload modal state
 // 文件上传模态框状态
 let uploadModal = null;
 let selectedFiles = new Map();
-let fileIdCounter = 0;
 let onSendCallback = null;
 
 // Listen for language changes to update modal text
@@ -73,13 +73,16 @@ function updateModalTexts() {
 		// Re-attach browse button event
 		const browseBtn = dragDropText.querySelector('.file-browse-btn');
 		if (browseBtn) {
-			on(browseBtn, 'click', handleBrowseClick);
+			on(browseBtn, 'click', () => {
+				const fileInput = uploadModal.querySelector('#file-upload-input');
+				if (fileInput) fileInput.click()
+			});
 		}
 	}
 	
 	// Update summary if files are selected
 	if (selectedFiles.size > 0) {
-		updateFileListDisplay();
+		updateFileList();
 	}
 }
 
@@ -92,7 +95,7 @@ function generateFileId() {
 // Create file upload modal
 // 创建文件上传模态框
 function createUploadModal() {
-	const modal = createElement('div', {
+	const modal = createElementHTML('div', {
 		class: 'file-upload-modal'
 	}, `
 		<div class="file-upload-overlay"></div>		<div class="file-upload-container">
@@ -304,12 +307,12 @@ function updateFileList() {
 	fileList.innerHTML = '';
 	
 	for (const [fileId, file] of selectedFiles) {
-		const fileItem = createElement('div', {
+		const fileItem = createElementHTML('div', {
 			class: 'file-item',
 			'data-file-id': fileId
 		}, `
 			<div class="file-item-info">
-				<div class="file-item-name" title="${file.name}">${file.name}</div>
+				<div class="file-item-name" title="${escapeHTML(file.name)}">${escapeHTML(file.name)}</div>
 				<div class="file-item-size">${formatFileSize(file.size)}</div>
 			</div>
 			<button class="file-item-remove" type="button" data-file-id="${fileId}">&times;</button>
@@ -356,8 +359,8 @@ async function handleSendFiles() {
 		
 	} catch (error) {
 		console.error('Error sending files:', error);
-		if (window.addSystemMsg) {
-			window.addSystemMsg(`${t('system.file_send_failed', 'Failed to send files:')} ${error.message}`);
+		if (hasBridge('addSystemMsg')) {
+			callBridge('addSystemMsg', `${t('system.file_send_failed', 'Failed to send files:')} ${error.message}`);
 		}
 	}
 }

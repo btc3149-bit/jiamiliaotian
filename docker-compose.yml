@@ -1,0 +1,52 @@
+# Minimal self-hosted deployment for the Docker path (item 35).
+# 中文说明见 README.md「Docker 部署（自托管）」一节。
+#
+#   docker compose up -d --build
+#
+# The image serves plain HTTP on port 80 only. For production, terminate
+# TLS in a reverse proxy in front of this service (placeholder below) and
+# let that layer redirect HTTP→HTTPS and send HSTS — see the TLS note in
+# README.md. Do NOT expose port 80 to the public internet in plaintext.
+# 镜像只提供明文 HTTP（80）。生产环境请在前面加 TLS 终结反代（下方占位），
+# 由该层做 HTTPS 跳转与 HSTS，不要把 80 直接暴露到公网。
+#
+# No STUN/TURN server is bundled or defaulted anywhere in this file
+# (RULES invariant 9): WebRTC calls stay off unless a user fills in their
+# own STUN/TURN in the client settings.
+# 本文件不内置、不默认任何第三方 STUN/TURN（不变量 9）；通话用的
+# STUN/TURN 只能由用户在客户端设置里自填。
+services:
+  jiamiliaotian:
+    build: .
+    image: jiamiliaotian
+    container_name: jiamiliaotian
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    environment:
+      # Node relay bind address/port INSIDE the container. nginx (same
+      # container) proxies WebSocket upgrades to 127.0.0.1:8088, so HOST
+      # should stay on loopback unless you know what you are doing.
+      # 容器内 Node 中继的监听地址/端口；同容器 nginx 把 WebSocket
+      # 升级请求代理到 127.0.0.1:8088，HOST 建议保持回环地址。
+      HOST: "127.0.0.1"
+      PORT: "8088"
+    # Mirrors the Dockerfile HEALTHCHECK (GET /healthz → bare "ok").
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8088/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # --- Reverse proxy placeholder (NOT started by default) ---------------
+  # 反代占位（默认不启动）：生产部署时取消注释/替换为你自己的反代，
+  # 在该层终结 TLS。示例为 Caddy 的形态，仅作占位说明，不要直接照抄域名。
+  # reverse-proxy:
+  #   image: caddy:2-alpine
+  #   restart: unless-stopped
+  #   ports:
+  #     - "443:443"
+  #   command: caddy reverse-proxy --from chat.example.com --to jiamiliaotian:80
+  #   depends_on:
+  #     - jiamiliaotian

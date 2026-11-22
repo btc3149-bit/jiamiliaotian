@@ -84,7 +84,8 @@ check('scroll hook consults shouldExpandWindow', chatSrc.includes("on(chatArea, 
 check('expansion restores scroll position by height delta', chatSrc.includes('prevTop + Math.max(0, chatArea.scrollHeight - prevHeight)'));
 check('jump expands the window for in-memory targets', chatSrc.includes('windowStartForIndex(idx, msgWindowStart)') && chatSrc.includes('rd.messages.findIndex'));
 check('jump keeps the not-loaded fallback for absent messages', chatSrc.includes('search.not_loaded'));
-check('chat.js never trims the data array', !/\.messages\.(splice|shift|pop)\s*\(/.test(chatSrc) && !/\.messages\.length\s*=/.test(chatSrc));
+// (length check targets assignment only; a === comparison is not trimming)
+check('chat.js never trims the data array', !/\.messages\.(splice|shift|pop)\s*\(/.test(chatSrc) && !/\.messages\.length\s*=[^=]/.test(chatSrc));
 check('util module stays DOM-free', !/document\.|window\.(document|location|addEventListener)|localStorage/.test(utilSrc));
 
 console.log(`\ntest-msgwindow: ${passed} passed, ${failed} failed`);

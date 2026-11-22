@@ -775,7 +775,7 @@ flex-direction: column;
 	background: none;
 	border: none;
 	cursor: pointer;
-	color: #808080;
+	color: #6e6e6e;
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -783,6 +783,13 @@ flex-direction: column;
 	padding-left: unset;
 	padding-right: unset;
 	transition: color 0.2s ease, background-color 0.2s ease, transform 0.2s ease;
+	position: relative;
+}
+/* Item 19: expanded touch target, visual size unchanged. */
+.chat-emoji-btn::after {
+	content: '';
+	position: absolute;
+	inset: -8px -4px;
 }
 
 .chat-emoji-btn:hover {
@@ -1219,6 +1226,24 @@ flex-direction: column;
 .file-download-btn:hover {
 	background: linear-gradient(135deg, #2196f3, #42a5f5);
 	transform: translateY(-2px);
+}
+
+/* #26: manual release entry for a completed received transfer */
+.file-release-btn {
+	margin-left: 6px;
+	padding: 2px 8px;
+	font-size: 11px;
+	color: #888;
+	background: transparent;
+	border: 1px solid #ccc;
+	border-radius: 10px;
+	cursor: pointer;
+	align-self: center;
+}
+
+.file-release-btn:hover {
+	color: #555;
+	border-color: #999;
 }
 
 .file-download-btn:active {
@@ -1680,7 +1705,7 @@ flex-direction: column;
 	}
 	
 	.file-status {
-		font-size: 10px;
+		font-size: 11px;
 		padding: 3px 6px;
 	}
 }
@@ -1864,7 +1889,7 @@ h2{
 /* E2EE channel fingerprint shown in the member list (security-hardening) */
 .member-fingerprint {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 10px;
+  font-size: 11px;
   color: #8a8f98;
   letter-spacing: 0.4px;
   margin-top: 2px;
@@ -1898,6 +1923,13 @@ h2{
   cursor: pointer;
   opacity: .75;
   transition: opacity .15s ease, transform .15s ease;
+  position: relative;
+}
+/* Item 19: ~40px touch target, visual size unchanged. */
+.msg-react-btn::after {
+  content: '';
+  position: absolute;
+  inset: -10px -2px;
 }
 .msg-react-btn:hover {
   opacity: 1;
@@ -1926,6 +1958,13 @@ h2{
   cursor: pointer;
   user-select: none;
   transition: background .15s ease, border-color .15s ease;
+  position: relative;
+}
+/* Item 19: ~40px tall touch target, visual size unchanged. */
+.msg-reaction-chip::after {
+  content: '';
+  position: absolute;
+  inset: -11px 0;
 }
 .msg-reaction-chip:hover {
   background: var(--bg-hover, #e9ecef);
@@ -1956,6 +1995,22 @@ h2{
   border-radius: 10px;
   cursor: pointer;
   transition: transform .12s ease, background .12s ease;
+  position: relative;
+}
+/* Item 19: ~40px touch target, visual size unchanged. */
+.reaction-option::after {
+  content: '';
+  position: absolute;
+  inset: -6px -4px;
+}
+/* Item 20: full emoji picker floated for reactions */
+.reaction-full-picker {
+  position: fixed !important;
+  bottom: auto !important;
+  z-index: 1001;
+  display: block;
+  opacity: 1;
+  transform: none;
 }
 .reaction-option:hover {
   transform: scale(1.25);
@@ -2372,7 +2427,7 @@ html[data-mode="dark"] .share-qr-box {
 	line-height: 1;
 	padding: 2px 4px;
 	border-radius: 6px;
-	color: #808080;
+	color: #6e6e6e;
 }
 .msg-act-btn:hover {
 	background: rgba(0, 0, 0, .07);
@@ -2486,8 +2541,15 @@ html[data-mode="dark"] .share-qr-box {
 	line-height: 1;
 	padding: 4px 6px;
 	border-radius: 8px;
-	color: #808080;
+	color: #6e6e6e;
 	align-self: center;
+	position: relative;
+}
+/* Item 19: ~42px touch target, visual size unchanged. */
+.chat-burn-btn::after {
+	content: '';
+	position: absolute;
+	inset: -8px -6px;
 }
 .chat-burn-btn:hover {
 	background: rgba(0, 0, 0, .06);
@@ -2573,8 +2635,16 @@ html[data-mode="dark"] .msg-read {
 	line-height: 1;
 	padding: 4px 6px;
 	border-radius: 8px;
-	color: #808080;
+	color: #6e6e6e;
 	align-self: center;
+	position: relative;
+}
+/* Item 19: expand the touch target to ~40px via a pseudo-element without
+   changing the visual size. */
+.chat-search-btn::after {
+	content: '';
+	position: absolute;
+	inset: -8px -6px;
 }
 .chat-search-btn:hover {
 	background: rgba(0, 0, 0, .06);
@@ -2609,7 +2679,7 @@ html[data-mode="dark"] .msg-read {
 	background: transparent;
 	cursor: pointer;
 	font-size: 16px;
-	color: #808080;
+	color: #6e6e6e;
 	padding: 4px 8px;
 	border-radius: 8px;
 }
@@ -2811,8 +2881,15 @@ html[data-mode="dark"] .jmlt-fwd-room:hover {
 	line-height: 1;
 	padding: 4px 6px;
 	border-radius: 8px;
-	color: #808080;
+	color: #6e6e6e;
 	align-self: center;
+	position: relative;
+}
+/* Item 19: ~40px touch target, visual size unchanged. */
+.chat-voice-btn::after {
+	content: '';
+	position: absolute;
+	inset: -8px -6px;
 }
 .chat-voice-btn:hover {
 	background: rgba(0, 0, 0, .06);
@@ -2867,7 +2944,7 @@ html[data-mode="dark"] .voice-dur {
 	margin-left: 4px;
 }
 .room-group-badge {
-	font-size: 10px;
+	font-size: 11px;
 	line-height: 1;
 	padding: 2px 6px;
 	border-radius: 8px;
@@ -3141,7 +3218,7 @@ html[data-mode="dark"] .call-incoming-card {
 	line-height: 1;
 	padding: 4px 6px;
 	border-radius: 8px;
-	color: #808080;
+	color: #6e6e6e;
 	align-self: center;
 }
 .chat-call-btn:hover, .chat-video-btn:hover {
@@ -3189,6 +3266,14 @@ html[data-mode="dark"] .chat-call-btn:hover, html[data-mode="dark"] .chat-video-
 	display: block; background: #111;
 }
 .jmlt-file-preview-generic { padding: 40px 24px; text-align: center; font-size: 15px; color: #555; }
+.jmlt-file-preview-media { width: 100%; max-height: 68vh; display: block; background: #111; }
+.jmlt-file-preview-audio { width: 100%; display: block; padding: 24px 16px; box-sizing: border-box; }
+.jmlt-file-preview-pdf { width: min(92vw, 720px); height: 68vh; border: 0; display: block; background: #fff; }
+.jmlt-file-preview-text {
+	margin: 0; padding: 14px 16px; overflow: auto; max-height: 68vh;
+	white-space: pre-wrap; word-break: break-word; font-size: 13px;
+	line-height: 1.5; text-align: left; font-family: ui-monospace, Menlo, Consolas, monospace;
+}
 .jmlt-file-preview-actions {
 	display: flex; gap: 10px; padding: 10px 14px;
 	border-top: 1px solid #eee; justify-content: flex-end;
@@ -3203,3 +3288,158 @@ html[data-mode="dark"] .jmlt-file-preview-card { background: #2a2a2a; color: #ee
 html[data-mode="dark"] .jmlt-file-preview-header { border-bottom-color: #444; }
 html[data-mode="dark"] .jmlt-file-preview-actions { border-top-color: #444; }
 html[data-mode="dark"] .jmlt-file-preview-close2 { background: #3c3c3c; color: #ddd; }
+
+/* ==================== items 41/42/43/45/47: a11y + UX batch ==================== */
+.sr-only {
+	position: absolute;
+	width: 1px; height: 1px;
+	padding: 0; margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+/* Item 41: message actions must be reachable without hover (keyboard/touch) */
+.bubble:focus-within .bubble-actions,
+.bubble-other-wrap:focus-within .bubble-actions {
+	display: inline-flex;
+	opacity: 1;
+}
+.bubble .bubble-actions:focus-within {
+	display: inline-flex;
+	opacity: 1;
+}
+:focus-visible {
+	outline: 2px solid #357ae8;
+	outline-offset: 2px;
+}
+/* Item 41: honour reduced-motion preferences */
+@media (prefers-reduced-motion: reduce) {
+	*, *::before, *::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
+}
+/* Item 42: mention autocomplete */
+.jmlt-mention-pop {
+	position: absolute;
+	bottom: 100%;
+	left: 0;
+	z-index: 60;
+	min-width: 180px;
+	max-height: 240px;
+	overflow-y: auto;
+	background: var(--bg-primary, #fff);
+	border: 1px solid var(--border-color, #d9dde3);
+	border-radius: 10px;
+	box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+	padding: 4px;
+}
+.jmlt-mention-row {
+	padding: 6px 10px;
+	border-radius: 6px;
+	cursor: pointer;
+	font-size: 14px;
+}
+.jmlt-mention-row.active, .jmlt-mention-row:hover {
+	background: rgba(53, 122, 232, .12);
+}
+.input-message-container { position: relative; }
+/* Item 42: read-by popup */
+.jmlt-readers-pop {
+	position: fixed;
+	top: 50%; left: 50%;
+	transform: translate(-50%, -50%);
+	z-index: 200;
+	background: var(--bg-primary, #fff);
+	border: 1px solid var(--border-color, #d9dde3);
+	border-radius: 12px;
+	box-shadow: 0 12px 32px rgba(0, 0, 0, .25);
+	padding: 16px 20px;
+	min-width: 200px;
+}
+.jmlt-readers-title { font-weight: 600; margin-bottom: 8px; }
+.jmlt-readers-name { padding: 3px 0; }
+.jmlt-readers-close { margin-top: 10px; }
+.msg-read { cursor: pointer; }
+/* Item 45: cross-room search filters + honest scope note */
+.jmlt-search-filters {
+	display: flex;
+	gap: 8px;
+	padding: 6px 10px 0;
+}
+.jmlt-search-sender { flex: 1; min-width: 0; }
+.jmlt-search-scope {
+	padding: 6px 12px;
+	font-size: 12px;
+	color: #6e6e6e;
+}
+/* Item 47: password strength */
+.pw-strength {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 2px 0 10px;
+	font-size: 12px;
+}
+.pw-strength-track {
+	flex: 0 0 90px;
+	height: 6px;
+	border-radius: 3px;
+	background: rgba(128, 128, 128, .25);
+	overflow: hidden;
+}
+.pw-strength-bar { height: 100%; width: 0; transition: width .2s ease; background: #b0b0b0; }
+.pw-strength-bar.pw-lvl-weak { background: #d9534f; }
+.pw-strength-bar.pw-lvl-fair { background: #e8a13a; }
+.pw-strength-bar.pw-lvl-good { background: #7ab648; }
+.pw-strength-bar.pw-lvl-strong { background: #3d9b35; }
+.pw-generate-btn {
+	margin-left: auto;
+	background: none;
+	border: none;
+	color: #357ae8;
+	cursor: pointer;
+	font-size: 12px;
+	text-decoration: underline;
+}
+/* Item 47: empty-room invite card */
+.jmlt-empty-room {
+	margin: 32px auto;
+	max-width: 420px;
+	text-align: center;
+	padding: 24px;
+	border: 1px dashed var(--border-color, #d9dde3);
+	border-radius: 14px;
+}
+.jmlt-empty-title { font-size: 17px; font-weight: 600; margin-bottom: 8px; }
+.jmlt-empty-body { font-size: 13px; color: #6e6e6e; margin-bottom: 14px; line-height: 1.5; }
+.jmlt-empty-invite-btn {
+	background: #357ae8;
+	color: #fff;
+	border: none;
+	border-radius: 8px;
+	padding: 8px 18px;
+	cursor: pointer;
+	font-size: 14px;
+}
+/* Item 43: shortcut help */
+.jmlt-shortcut-box { padding: 20px 24px; }
+.jmlt-shortcut-row {
+	display: flex;
+	gap: 14px;
+	align-items: center;
+	padding: 5px 0;
+	font-size: 14px;
+}
+.jmlt-shortcut-row kbd {
+	background: rgba(128, 128, 128, .18);
+	border-radius: 5px;
+	padding: 2px 8px;
+	font-family: ui-monospace, Menlo, Consolas, monospace;
+	font-size: 12px;
+	min-width: 86px;
+	text-align: center;
+}

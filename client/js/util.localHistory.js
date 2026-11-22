@@ -4,13 +4,67 @@
 // SECURITY / RULES.md 对照（第一准则逐条自查）：
 // - 不变量 4（零持久化）：服务器侧零改动；客户端只在用户显式开启后，
 //   把「自己可见的消息文本」加密存入 localStorage。密码/密钥素材绝不落盘——
-//   解密密钥由房间密码经 PBKDF2(200k) 现场派生，仅存内存，刷新页面即消失。
+//   解密密钥由房间密码经 PBKDF2 现场派生，仅存内存，刷新页面即消失。
+//   迭代次数随落盘 blob 版本：v1 = 200k（历史），v2 = 600k（OWASP 现行口径，
+//   不变量 3「只可上调不可下调」）。读取按 blob.v 选参数，v1 旧数据照常可解。
 // - 落盘内容永远是 AES-256-GCM 密文：拿到设备的人没有房间密码就读不出任何消息。
 // - salt = 'jmlt_hist:' + 频道哈希（客户端自算），房间名明文不上存储。
 // - 容量护栏：序列化超过 ~400KB 时从最旧的消息开始裁剪，防止撑爆配额。
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
+
+// ---- stored-blob codec (upgrade #29b) --------------------------------------
+// v1 stored iv/ct as JSON number arrays (1–4 chars per byte). v2 stores them
+// as base64 strings, shrinking the on-disk blob by roughly 60–70%. The blob
+// is still AES-GCM ciphertext and the key is still memory-only — only the
+// encoding of the ciphertext changed. loadLocalHistory accepts BOTH v1 and
+// v2 so existing users' history is never lost; flushHistory always writes v2,
+// which is the (lazy, per-room) migration path.
+// v1 把 iv/ct 存成 JSON 数字数组（每字节 1–4 字符）；v2 改 base64 落盘，
+// 体积降约 60–70%。落盘仍是 AES-GCM 密文、钥仍只存内存——只换密文编码。
+// 读取同时兼容 v1/v2，旧数据绝不丢；写入一律 v2，即按房间惰性迁移。
+export const HISTORY_FORMAT_V1 = 1;
+export const HISTORY_FORMAT_V2 = 2;
+
+export function bytesToBase64(bytes) {
+	const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+	let bin = '';
+	const CHUNK = 0x8000; // chunked: fromCharCode.apply would overflow the stack on large blobs
+	for (let i = 0; i < u8.length; i += CHUNK) {
+		bin += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK))
+	}
+	return btoa(bin)
+}
+
+export function base64ToBytes(b64) {
+	if (typeof b64 !== 'string') return null;
+	try {
+		const bin = atob(b64);
+		const out = new Uint8Array(bin.length);
+		for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+		return out
+	} catch (error) {
+		return null
+	}
+}
+
+// Normalize a stored blob of either format version to raw {iv, ct} bytes,
+// or null when the shape is not a recognized history blob.
+// 把任一版本的落盘 blob 归一为 {iv, ct} 原始字节；形状不认返回 null。
+export function decodeStoredHistoryBlob(blob) {
+	if (!blob || typeof blob !== 'object') return null;
+	if (blob.v === HISTORY_FORMAT_V2) {
+		const iv = base64ToBytes(blob.iv);
+		const ct = base64ToBytes(blob.ct);
+		return iv && ct ? { iv, ct } : null
+	}
+	if (blob.v === HISTORY_FORMAT_V1) {
+		if (!Array.isArray(blob.iv) || !Array.isArray(blob.ct)) return null;
+		return { iv: new Uint8Array(blob.iv), ct: new Uint8Array(blob.ct) }
+	}
+	return null
+}
 
 function histStorageKey(channelHash) {
 	const safe = String(channelHash || '');
@@ -30,15 +84,20 @@ export function isLocalHistoryEnabled() {
 	}
 }
 
+export const HISTORY_ITERATIONS = 600000;
+export const HISTORY_LEGACY_ITERATIONS = 200000;
+export const HISTORY_BLOB_VERSION = 2;
+export const HISTORY_LEGACY_BLOB_VERSION = 1;
+
 // Derive the AES-GCM history key from the room password (memory-only).
 // 由房间密码派生历史加密密钥（仅存内存，绝不持久化）。
-export async function deriveHistoryKey(password, channelHash) {
+export async function deriveHistoryKey(password, channelHash, iterations = HISTORY_ITERATIONS) {
 	const baseKey = await crypto.subtle.importKey(
 		'raw', enc.encode(String(password || '')), 'PBKDF2', false, ['deriveBits']);
 	const bits = await crypto.subtle.deriveBits({
 		name: 'PBKDF2',
 		salt: histSalt(channelHash),
-		iterations: 200000,
+		iterations,
 		hash: 'SHA-256'
 	}, baseKey, 256);
 	return crypto.subtle.importKey('raw', bits, 'AES-GCM', false, ['encrypt', 'decrypt'])
@@ -106,9 +165,9 @@ async function flushHistory(rd) {
 			iv
 		}, rd.historyKey, enc.encode(payload));
 		const blob = {
-			v: 1,
-			iv: Array.from(iv),
-			ct: Array.from(new Uint8Array(ct))
+			v: HISTORY_FORMAT_V2,
+			iv: bytesToBase64(iv),
+			ct: bytesToBase64(new Uint8Array(ct))
 		};
 		localStorage.setItem(key, JSON.stringify(blob))
 	} catch (error) {
@@ -135,13 +194,23 @@ export async function loadLocalHistory(roomName, password, channelHash) {
 	} catch (error) {
 		return []
 	}
-	if (!blob || blob.v !== 1 || !Array.isArray(blob.iv) || !Array.isArray(blob.ct)) return [];
+	// Accept v1 (number arrays @200k) and v2 (base64 @600k) — never drop old data.
+	// 同时接受 v1（数字数组 @200k）与 v2（base64 @600k）——绝不丢旧数据。
+	const decoded = decodeStoredHistoryBlob(blob);
+	if (!decoded) return [];
 	try {
-		const histKey = await deriveHistoryKey(password, channelHash);
+		// v1 blobs were derived at 200k; v2 at 600k. Pick by stored version
+		// so pre-upgrade history keeps loading (and is re-written as v2 on
+		// the next flush, since the write key is always current-strength).
+		// v1 按 200k、v2 按 600k 派生读取；下次回写自动升级为 v2。
+		const iterations = blob.v === HISTORY_LEGACY_BLOB_VERSION
+			? HISTORY_LEGACY_ITERATIONS
+			: HISTORY_ITERATIONS;
+		const histKey = await deriveHistoryKey(password, channelHash, iterations);
 		const plain = await crypto.subtle.decrypt({
 			name: 'AES-GCM',
-			iv: new Uint8Array(blob.iv)
-		}, histKey, new Uint8Array(blob.ct));
+			iv: decoded.iv
+		}, histKey, decoded.ct);
 		const entries = JSON.parse(dec.decode(plain));
 		return Array.isArray(entries) ? entries : []
 	} catch (error) {

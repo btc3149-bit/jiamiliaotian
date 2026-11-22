@@ -22,11 +22,23 @@ import {
 import {
 	t
 } from './util.i18n.js';
+import { callBridge, hasBridge } from './util.bridge.js';
 import {
 	updateChatInputStyle
 } from './chat.js';
+import {
+	passwordStrength,
+	generateStrongPassword,
+	isWeakPassword,
+	focusIntoModal,
+	restoreModalFocus,
+	handleModalTab
+} from './util.a11yUx.js';
 // P3: QR invite codes (qrcode-generator, MIT, zero deps — RULES.md invariant 6 vetted)
-import qrcode from 'qrcode-generator';
+// Item 14: loaded lazily via dynamic import — QR codes are only generated
+// when a share/migration modal opens, so the library stays out of the
+// first-screen bundle (its own chunk, cached by the SW static-shell rule).
+// 条目 14：qrcode-generator 改动态 import 懒加载，打开分享/迁移弹窗时才加载。
 
 // Utility functions for security and error handling
 // 安全和错误处理工具函数
@@ -62,10 +74,10 @@ function simpleDecrypt(encrypted) {
 // 验证房间数据
 function validateRoomData(roomData) {
 	if (!roomData) {
-		return { valid: false, error: 'No room data available' };
+		return { valid: false, error: t('action.no_room_data', 'No room data available') };
 	}
 	if (!roomData.roomName || roomData.roomName.trim() === '') {
-		return { valid: false, error: 'Room name is required' };
+		return { valid: false, error: t('action.room_name_required', 'Room name is required') };
 	}
 	return { valid: true };
 }
@@ -74,13 +86,13 @@ function validateRoomData(roomData) {
 // 复制文本到剪贴板（含降级处理）
 function copyToClipboard(text, successMessage = t('action.copied', 'Copied to clipboard!'), errorPrefix = t('action.copy_failed', 'Copy failed, url:')) {
 	if (!text) {
-		window.addSystemMsg && window.addSystemMsg(t('action.nothing_to_copy', 'Nothing to copy'));
+		callBridge('addSystemMsg', t('action.nothing_to_copy', 'Nothing to copy'));
 		return;
 	}
 
 	if (navigator.clipboard && navigator.clipboard.writeText) {
 		navigator.clipboard.writeText(text).then(() => {
-			window.addSystemMsg && window.addSystemMsg(successMessage);
+			callBridge('addSystemMsg', successMessage);
 		}).catch((error) => {
 			console.error('Clipboard write failed:', error);
 			showFallbackCopy(text, errorPrefix);
@@ -97,7 +109,7 @@ function showFallbackCopy(text, prefix) {
 		prompt(prefix, text);
 	} else {
 		// For environments where prompt is not available
-		window.addSystemMsg && window.addSystemMsg(t('action.copy_not_supported', 'Copy not supported in this environment'));
+		callBridge('addSystemMsg', t('action.copy_not_supported', 'Copy not supported in this environment'));
 	}
 }
 
@@ -109,6 +121,10 @@ function executeMenuAction(action, closeMenuCallback) {
 			case 'share':
 				handleShareAction();
 				break;
+			case 'shortcuts':
+				// item 43: help panel lives in main.js (bridge avoids a cycle)
+				if (typeof window.__jmltShortcutHelp === 'function') window.__jmltShortcutHelp();
+				break;
 			case 'exit':
 				handleExitAction();
 				break;
@@ -117,10 +133,16 @@ function executeMenuAction(action, closeMenuCallback) {
 		}
 	} catch (error) {
 		console.error('Menu action failed:', error);
-		window.addSystemMsg && window.addSystemMsg(t('action.action_failed', 'Action failed. Please try again.'));
+		callBridge('addSystemMsg', t('action.action_failed', 'Action failed. Please try again.'));
 	} finally {
 		closeMenuCallback && closeMenuCallback();
 	}
+}
+
+// Item 47: exported so main.js can bridge it to chat.js's empty-room
+// invite card (window.__jmltOpenShare) without an import cycle.
+export function openShareInvite() {
+	handleShareAction();
 }
 
 // Handle share action
@@ -128,7 +150,7 @@ function executeMenuAction(action, closeMenuCallback) {
 function handleShareAction() {
 	const validation = validateRoomData(roomsData[activeRoomIndex]);
 	if (!validation.valid) {
-		window.addSystemMsg && window.addSystemMsg(`${t('action.cannot_share', 'Cannot share:')} ${validation.error}`);
+		callBridge('addSystemMsg', `${t('action.cannot_share', 'Cannot share:')} ${validation.error}`);
 		return;
 	}
 
@@ -153,7 +175,7 @@ function handleShareAction() {
 // The QR encodes the same invite link (obfuscated r/p params, see README
 // security notes) — scanning it on another device joins the room directly.
 // P3：分享弹窗 + 二维码邀请。二维码编码与链接相同的邀请参数，扫码即可入房。
-function showShareModal(url) {
+async function showShareModal(url) {
 	// remove any previous share modal
 	const prev = document.querySelector('.share-modal-overlay');
 	if (prev) prev.remove();
@@ -163,6 +185,7 @@ function showShareModal(url) {
 
 	let qrSvg = '';
 	try {
+		const { default: qrcode } = await import('qrcode-generator');
 		// typeNumber 0 = auto-size, 'M' error correction — good for long URLs
 		const qr = qrcode(0, 'M');
 		qr.addData(url);
@@ -176,11 +199,14 @@ function showShareModal(url) {
 		console.error('QR generation failed:', error)
 	}
 
+	overlay.setAttribute('role', 'dialog');
+	overlay.setAttribute('aria-modal', 'true');
+	overlay.setAttribute('aria-label', t('action.share_title', 'Invite to Room'));
 	overlay.innerHTML = `
 		<div class="share-modal-container">
 			<div class="share-modal-header">
 				<h3>${t('action.share_title', 'Invite to Room')}</h3>
-				<button class="share-modal-close" type="button" aria-label="Close">&times;</button>
+				<button class="share-modal-close" type="button" aria-label="${escapeHTML(t('action.close', 'Close'))}">&times;</button>
 			</div>
 			<div class="share-modal-body">
 				${qrSvg ? `<div class="share-qr-box">${qrSvg}</div><div class="share-qr-hint">${t('action.share_qr_hint', 'Scan to join this room')}</div>` : `<div class="share-qr-hint">${t('action.qr_failed', 'QR code unavailable — copy the link below.')}</div>`}
@@ -191,10 +217,12 @@ function showShareModal(url) {
 	`;
 
 	document.body.appendChild(overlay);
+	focusIntoModal(overlay);
 
 	const close = () => {
 		overlay.remove();
-		document.removeEventListener('keydown', escHandler)
+		document.removeEventListener('keydown', escHandler);
+		restoreModalFocus();
 	};
 	overlay.addEventListener('click', (e) => {
 		if (e.target === overlay) close()
@@ -205,9 +233,10 @@ function showShareModal(url) {
 	if (copyBtn) copyBtn.addEventListener('click', () => {
 		copyToClipboard(url, t('action.share_copied', 'Share link copied!'), t('action.copy_url_failed', 'Copy failed, url:'))
 	});
-	// ESC to close
+	// ESC to close; Tab trapped inside the dialog (item 41)
 	const escHandler = (e) => {
-		if (e.key === 'Escape') close()
+		if (e.key === 'Escape') close();
+		else handleModalTab(overlay, e);
 	};
 	document.addEventListener('keydown', escHandler)
 }
@@ -237,7 +266,7 @@ export function renderMainHeader() {
 		onlineCount += 1
 	}
 	const safeRoomName = escapeHTML(roomName);
-	$id("main-header").innerHTML = `<button class="mobile-menu-btn"id="mobile-menu-btn"aria-label="Open Sidebar"><svg width="35px"height="35px"viewBox="0 0 24 24"fill="none"xmlns="http://www.w3.org/2000/svg"><g id="SVGRepo_bgCarrier"stroke-width="0"></g><g id="SVGRepo_tracerCarrier"stroke-linecap="round"stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"><path fill-rule="evenodd"clip-rule="evenodd"d="M21.4498 10.275L11.9998 3.1875L2.5498 10.275L2.9998 11.625H3.7498V20.25H20.2498V11.625H20.9998L21.4498 10.275ZM5.2498 18.75V10.125L11.9998 5.0625L18.7498 10.125V18.75H14.9999V14.3333L14.2499 13.5833H9.74988L8.99988 14.3333V18.75H5.2498ZM10.4999 18.75H13.4999V15.0833H10.4999V18.75Z"fill="#808080"></path></g></svg></button><div class="main-header-center"id="main-header-center"><div class="main-header-flex"><div class="group-title group-title-bold">#${safeRoomName}</div><span class="main-header-members">${onlineCount} ${t('ui.members', 'members')}</span></div></div><div class="main-header-actions"><button class="more-btn"id="more-btn"aria-label="More Options"><svg width="35px"height="35px"viewBox="0 0 24 24"fill="none"xmlns="http://www.w3.org/2000/svg"><g id="SVGRepo_bgCarrier"stroke-width="0"></g><g id="SVGRepo_tracerCarrier"stroke-linecap="round"stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"><circle cx="12"cy="6"r="1.5"fill="#808080"></circle><circle cx="12"cy="12"r="1.5"fill="#808080"></circle><circle cx="12"cy="18"r="1.5"fill="#808080"></circle></g></svg></button><button class="mobile-info-btn"id="mobile-info-btn"aria-label="Open Members"><svg width="35px"height="35px"viewBox="0 0 24 24"fill="none"xmlns="http://www.w3.org/2000/svg"><g id="SVGRepo_bgCarrier"stroke-width="0"></g><g id="SVGRepo_tracerCarrier"stroke-linecap="round"stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"><path fill-rule="evenodd"clip-rule="evenodd"d="M16.0603 18.307C14.89 19.0619 13.4962 19.5 12 19.5C10.5038 19.5 9.10996 19.0619 7.93972 18.307C8.66519 16.7938 10.2115 15.75 12 15.75C13.7886 15.75 15.3349 16.794 16.0603 18.307ZM17.2545 17.3516C16.2326 15.5027 14.2632 14.25 12 14.25C9.73663 14.25 7.76733 15.5029 6.74545 17.3516C5.3596 15.9907 4.5 14.0958 4.5 12C4.5 7.85786 7.85786 4.5 12 4.5C16.1421 4.5 19.5 7.85786 19.5 12C19.5 14.0958 18.6404 15.9908 17.2545 17.3516ZM21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12ZM12 12C13.2426 12 14.25 10.9926 14.25 9.75C14.25 8.50736 13.2426 7.5 12 7.5C10.7574 7.5 9.75 8.50736 9.75 9.75C9.75 10.9926 10.7574 12 12 12ZM12 13.5C14.0711 13.5 15.75 11.8211 15.75 9.75C15.75 7.67893 14.0711 6 12 6C9.92893 6 8.25 7.67893 8.25 9.75C8.25 11.8211 9.92893 13.5 12 13.5Z"fill="#808080"></path></g></svg></button><div class="more-menu"id="more-menu"><div class="more-menu-item"data-action="share">${t('action.share', 'Share')}</div><div class="more-menu-item"data-action="exit">${t('action.exit', 'Quit')}</div></div></div>`;
+	$id("main-header").innerHTML = `<button class="mobile-menu-btn"id="mobile-menu-btn"aria-label="Open Sidebar"><svg width="35px"height="35px"viewBox="0 0 24 24"fill="none"xmlns="http://www.w3.org/2000/svg"><g id="SVGRepo_bgCarrier"stroke-width="0"></g><g id="SVGRepo_tracerCarrier"stroke-linecap="round"stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"><path fill-rule="evenodd"clip-rule="evenodd"d="M21.4498 10.275L11.9998 3.1875L2.5498 10.275L2.9998 11.625H3.7498V20.25H20.2498V11.625H20.9998L21.4498 10.275ZM5.2498 18.75V10.125L11.9998 5.0625L18.7498 10.125V18.75H14.9999V14.3333L14.2499 13.5833H9.74988L8.99988 14.3333V18.75H5.2498ZM10.4999 18.75H13.4999V15.0833H10.4999V18.75Z"fill="#808080"></path></g></svg></button><div class="main-header-center"id="main-header-center"><div class="main-header-flex"><div class="group-title group-title-bold">#${safeRoomName}</div><span class="main-header-members">${onlineCount} ${t('ui.members', 'members')}</span></div></div><div class="main-header-actions"><button class="more-btn"id="more-btn"aria-label="More Options"><svg width="35px"height="35px"viewBox="0 0 24 24"fill="none"xmlns="http://www.w3.org/2000/svg"><g id="SVGRepo_bgCarrier"stroke-width="0"></g><g id="SVGRepo_tracerCarrier"stroke-linecap="round"stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"><circle cx="12"cy="6"r="1.5"fill="#808080"></circle><circle cx="12"cy="12"r="1.5"fill="#808080"></circle><circle cx="12"cy="18"r="1.5"fill="#808080"></circle></g></svg></button><button class="mobile-info-btn"id="mobile-info-btn"aria-label="Open Members"><svg width="35px"height="35px"viewBox="0 0 24 24"fill="none"xmlns="http://www.w3.org/2000/svg"><g id="SVGRepo_bgCarrier"stroke-width="0"></g><g id="SVGRepo_tracerCarrier"stroke-linecap="round"stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"><path fill-rule="evenodd"clip-rule="evenodd"d="M16.0603 18.307C14.89 19.0619 13.4962 19.5 12 19.5C10.5038 19.5 9.10996 19.0619 7.93972 18.307C8.66519 16.7938 10.2115 15.75 12 15.75C13.7886 15.75 15.3349 16.794 16.0603 18.307ZM17.2545 17.3516C16.2326 15.5027 14.2632 14.25 12 14.25C9.73663 14.25 7.76733 15.5029 6.74545 17.3516C5.3596 15.9907 4.5 14.0958 4.5 12C4.5 7.85786 7.85786 4.5 12 4.5C16.1421 4.5 19.5 7.85786 19.5 12C19.5 14.0958 18.6404 15.9908 17.2545 17.3516ZM21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12ZM12 12C13.2426 12 14.25 10.9926 14.25 9.75C14.25 8.50736 13.2426 7.5 12 7.5C10.7574 7.5 9.75 8.50736 9.75 9.75C9.75 10.9926 10.7574 12 12 12ZM12 13.5C14.0711 13.5 15.75 11.8211 15.75 9.75C15.75 7.67893 14.0711 6 12 6C9.92893 6 8.25 7.67893 8.25 9.75C8.25 11.8211 9.92893 13.5 12 13.5Z"fill="#808080"></path></g></svg></button><div class="more-menu"id="more-menu"><div class="more-menu-item"data-action="share">${t('action.share', 'Share')}</div><div class="more-menu-item"data-action="shortcuts">${t('shortcut.open_help', 'Keyboard shortcuts')}</div><div class="more-menu-item"data-action="exit">${t('action.exit', 'Quit')}</div></div></div>`;
 	setupMoreBtnMenu();
 	setupMobileUIHandlers()
 }
@@ -458,11 +487,11 @@ export function setupMoreBtnMenu() {
 		}
 	});
 
-	menu.addEventListener('animationend', function(e) {
+	menu.addEventListener('animationend', function() {
 		animating = false;
 	});
 
-	menu.addEventListener('transitionend', function(e) {
+	menu.addEventListener('transitionend', function() {
 		animating = false;
 	});
 }
@@ -476,7 +505,7 @@ export function preventSpaceInput(input) {
 			e.preventDefault()
 		}
 	});
-	input.addEventListener('input', function(e) {
+	input.addEventListener('input', function() {
 		input.value = input.value.replace(/[\s\p{P}\p{S}]/gu, function(match) {
 			return match === "'" ? "'" : ''
 		})
@@ -501,6 +530,18 @@ export function loginFormHandler(modal) {
 			password = document.getElementById('password').value.trim();
 			btn = document.querySelector('#login-form .login-btn');
 			roomInput = document.getElementById('roomName')
+		}
+		// Item 47: weak / empty room password gets one honest confirmation.
+		// Wording states the consequence plainly without scare tactics:
+		// the password is the room's only content protection.
+		const pwdLocked = (() => { const el = document.getElementById(modal ? 'password-modal' : 'password'); return !!(el && el.readOnly); })();
+		if (pwdLocked) {
+			// Invite-link autofill locks the password field — the sender chose
+			// it; do not second-guess the joiner with a strength prompt.
+		} else if (!password) {
+			if (!window.confirm(t('pw.empty_confirm', 'No password set: anyone who knows the room name can read this room’s messages. Continue without a password?'))) return;
+		} else if (isWeakPassword(password)) {
+			if (!window.confirm(t('pw.weak_confirm', 'This room password is weak. The password is the only thing protecting the room content — anyone who knows the room name and guesses this password can read everything. Continue anyway?'))) return;
 		}
 		const exists = roomsData.some(rd => rd.roomName && rd.roomName.toLowerCase() === roomName.toLowerCase());
 		if (roomInput) {
@@ -532,7 +573,7 @@ export function loginFormHandler(modal) {
 			btn.disabled = true;
 			btn.innerText = t('ui.connecting', 'Connecting...')
 		}
-		window.joinRoom(userName, roomName, password, modal, function(success) {
+		callBridge('joinRoom', userName, roomName, password, modal, function(success) {
 			if (!success && btn) {
 				btn.disabled = false;
 				btn.innerText = 'ENTER'
@@ -557,9 +598,47 @@ export function generateLoginForm(isModal = false) {
 			<input id="password${idPrefix}" type="password" autocomplete="${isModal ? 'off' : 'current-password'}" minlength="1" maxlength="64" placeholder="">
 			<label for="password${idPrefix}" class="floating-label">${t('ui.node_password', 'Room Password')} <span class="optional">${t('ui.optional', '(optional)')}</span></label>
 		</div>
+		<div class="pw-strength" id="pw-strength${idPrefix}" aria-live="polite">
+			<div class="pw-strength-track"><div class="pw-strength-bar" id="pw-strength-bar${idPrefix}"></div></div>
+			<span class="pw-strength-label" id="pw-strength-label${idPrefix}"></span>
+			<button type="button" class="pw-generate-btn" id="pw-generate${idPrefix}">${t('pw.generate', 'Generate strong password')}</button>
+		</div>
 		<button type="submit" class="login-btn">${t('ui.enter', 'ENTER')}</button>
 	`;
 }
+// Item 47: live password-strength meter + local strong-password generator.
+// The generated password is filled into the field so it travels with the
+// invite link exactly like a typed one; nothing is stored or sent anywhere.
+export function setupPasswordStrength(idPrefix = '') {
+	const input = document.getElementById('password' + idPrefix);
+	if (!input || input.dataset.pwSetup === '1') return;
+	input.dataset.pwSetup = '1';
+	const bar = document.getElementById('pw-strength-bar' + idPrefix);
+	const label = document.getElementById('pw-strength-label' + idPrefix);
+	const genBtn = document.getElementById('pw-generate' + idPrefix);
+	const render = () => {
+		const st = passwordStrength(input.value);
+		if (bar) {
+			bar.style.width = (st.score * 25) + '%';
+			bar.className = 'pw-strength-bar pw-lvl-' + st.level;
+		}
+		if (label) {
+			const key = st.level === 'empty' ? 'pw.empty' : 'pw.' + st.level;
+			label.textContent = t('pw.strength', 'Password strength') + ': ' + t(key, st.level);
+		}
+	};
+	input.addEventListener('input', render);
+	render();
+	if (genBtn) {
+		genBtn.addEventListener('click', () => {
+			input.value = generateStrongPassword(20);
+			input.dispatchEvent(new Event('input', { bubbles: true }));
+			render();
+			input.focus();
+		});
+	}
+}
+
 export function openLoginModal() {
 	const modal = document.createElement('div');
 	modal.className = 'login-modal';
@@ -568,7 +647,9 @@ export function openLoginModal() {
 	modal.querySelector('.login-modal-close').onclick = () => modal.remove();
 	preventSpaceInput(modal.querySelector('#userName-modal'));
 	preventSpaceInput(modal.querySelector('#roomName-modal'));
-	preventSpaceInput(modal.querySelector('#password-modal'));	const form = modal.querySelector('#login-form-modal');
+	preventSpaceInput(modal.querySelector('#password-modal'));
+	setupPasswordStrength('-modal');
+	const form = modal.querySelector('#login-form-modal');
 	form.addEventListener('submit', loginFormHandler(modal));
 	autofillRoomPwd('-modal')
 }
@@ -617,8 +698,8 @@ export function autofillRoomPwd(formPrefix = '') {
 		isPlaintext = true;
 		
 		// Show security warning for plaintext URLs
-		if (window.addSystemMsg) {
-			window.addSystemMsg(t('system.security_warning', '⚠️ This link uses an old format. Room data is not encrypted.'), true);
+		if (hasBridge('addSystemMsg')) {
+			callBridge('addSystemMsg', t('system.security_warning', '⚠️ This link uses an old format. Room data is not encrypted.'), true);
 		}
 	}
 		// Fill in the form fields
@@ -638,7 +719,7 @@ export function autofillRoomPwd(formPrefix = '') {
 			
 			// Add visual indicator for no password and keep label floating
 			if (!pwdValue) {
-				pwdInput.placeholder = 'No password required';
+				pwdInput.placeholder = t('ui.no_password_required', 'No password required');
 				// Add a space to make the input appear "filled" so the label stays floating
 				pwdInput.value = ' ';
 				// Make the text invisible but keep the label floating behavior
@@ -661,6 +742,7 @@ export function initLoginForm() {
 		// 只有当登录表单为空时才初始化
 		// Only initialize if login form is empty
 		loginFormContainer.innerHTML = generateLoginForm(false);
+		setupPasswordStrength('');
 	}
 	
 	// 为登录页面添加class，用于手机适配
