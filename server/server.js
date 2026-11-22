@@ -768,15 +768,6 @@ const isString = (value) => {
 };
 
 
-const isArray = (value) => {
-	return (
-		value &&
-		Object.prototype.toString.call(value) === '[object Array]' ?
-		true :
-		false
-	);
-};
-
 
 const isObject = (value) => {
 	return (

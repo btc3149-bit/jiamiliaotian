@@ -3,7 +3,6 @@
 
 import {
 	$,
-	$id,
 	createElement,
 	on,
 	addClass,
@@ -16,7 +15,6 @@ import { t } from './util.i18n.js';
 // 文件上传模态框状态
 let uploadModal = null;
 let selectedFiles = new Map();
-let fileIdCounter = 0;
 let onSendCallback = null;
 
 // Listen for language changes to update modal text
@@ -73,13 +71,16 @@ function updateModalTexts() {
 		// Re-attach browse button event
 		const browseBtn = dragDropText.querySelector('.file-browse-btn');
 		if (browseBtn) {
-			on(browseBtn, 'click', handleBrowseClick);
+			on(browseBtn, 'click', () => {
+				const fileInput = uploadModal.querySelector('#file-upload-input');
+				if (fileInput) fileInput.click()
+			});
 		}
 	}
 	
 	// Update summary if files are selected
 	if (selectedFiles.size > 0) {
-		updateFileListDisplay();
+		updateFileList();
 	}
 }
 

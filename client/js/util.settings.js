@@ -4,20 +4,16 @@ import {
 	$,
 	$$,
 	$id,
-	createElement,
-	on,
-	off,
-	addClass,
-	removeClass
+	on
 } from './util.dom.js';
 
 // Import theme utilities
 // 导入主题工具函数
-import { THEMES, getCurrentTheme, applyTheme } from './util.theme.js';
+import { THEMES, applyTheme } from './util.theme.js';
 
 // Import i18n utilities
 // 导入国际化工具函数
-import { t, setLanguage, getCurrentLanguage, initI18n } from './util.i18n.js';
+import { t, setLanguage, initI18n } from './util.i18n.js';
 // P3: dark mode (system-following) + local encrypted history
 import { applyDarkModeSetting } from './util.darkmode.js';
 import { clearAllLocalHistory } from './util.localHistory.js';

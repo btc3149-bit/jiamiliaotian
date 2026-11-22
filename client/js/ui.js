@@ -458,11 +458,11 @@ export function setupMoreBtnMenu() {
 		}
 	});
 
-	menu.addEventListener('animationend', function(e) {
+	menu.addEventListener('animationend', function() {
 		animating = false;
 	});
 
-	menu.addEventListener('transitionend', function(e) {
+	menu.addEventListener('transitionend', function() {
 		animating = false;
 	});
 }
@@ -476,7 +476,7 @@ export function preventSpaceInput(input) {
 			e.preventDefault()
 		}
 	});
-	input.addEventListener('input', function(e) {
+	input.addEventListener('input', function() {
 		input.value = input.value.replace(/[\s\p{P}\p{S}]/gu, function(match) {
 			return match === "'" ? "'" : ''
 		})

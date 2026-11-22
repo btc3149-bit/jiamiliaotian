@@ -1,0 +1,20 @@
+{
+	// checkJs ONLY for the three DOM-free pure-logic modules (review
+	// item 25): worker/ratelimit.js, client/js/util.validate.js,
+	// client/js/util.ratchet.js. Full-repo type checking is explicitly
+	// out of scope (no TypeScript migration — see review "not worth it").
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"checkJs": true,
+		"noEmit": true,
+		"strict": false,
+		"skipLibCheck": true
+	},
+	"include": [
+		"worker/ratelimit.js",
+		"client/js/util.validate.js",
+		"client/js/util.ratchet.js"
+	]
+}

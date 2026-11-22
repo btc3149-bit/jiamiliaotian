@@ -1,6 +1,5 @@
 // Smoke test for util.localHistory.js (Node 22 webcrypto + localStorage shim)
 import {
-	deriveHistoryKey,
 	setupRoomHistory,
 	appendLocalHistory,
 	loadLocalHistory,
@@ -29,7 +28,6 @@ globalThis.localStorage = {
 };
 globalThis.window = { dispatchEvent: () => {} };
 
-const CH = 'a'.repeat(64); // fake channel hash
 
 t('isLocalHistoryEnabled defaults to false', () => {
 	if (isLocalHistoryEnabled() !== false) throw new Error('should be off by default');
@@ -85,7 +83,7 @@ t('clearAllLocalHistory wipes storage and dispatches event', async () => {
 t('oversized entries are slimmed, not dropped silently at quota', async () => {
 	localStorage.setItem('settings', JSON.stringify({ localHistory: true }));
 	const rd = {};
-	const hash = await setupRoomHistory(rd, 'room3', 'pw3');
+	await setupRoomHistory(rd, 'room3', 'pw3');
 	appendLocalHistory(rd, { type: 'me', text: 'X'.repeat(200 * 1024), timestamp: 1 }); // 200KB > 100KB slim threshold
 	if (rd.historyBuffer[0].text.length >= 200 * 1024) throw new Error('oversized entry not slimmed');
 	if (!rd.historyBuffer[0].omitted) throw new Error('missing omitted marker');

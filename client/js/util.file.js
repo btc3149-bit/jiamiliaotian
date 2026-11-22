@@ -1,6 +1,6 @@
 // Import necessary modules
 // 导入必要的模块
-import { deflate, inflate, Deflate } from 'fflate';
+import { inflate, Deflate } from 'fflate';
 import { showFileUploadModal } from './util.fileUpload.js';
 import { imageFileToCleanFile } from './util.image.js';
 import { t } from './util.i18n.js';
@@ -268,16 +268,6 @@ async function compressFilesToArchive(files, volumeSize = DEFAULT_VOLUME_SIZE) {
 	}
 }
 
-// Helper function to read file as array buffer
-// 辅助函数：将文件读取为ArrayBuffer
-function readFileAsArrayBuffer(file) {
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onload = (e) => resolve(e.target.result);
-		reader.onerror = () => reject(reader.error);
-		reader.readAsArrayBuffer(file);
-	});
-}
 
 // Decompress volumes back to file
 // 将分卷解压回文件
@@ -380,7 +370,7 @@ async function decompressArchiveToFiles(volumes, fileManifest, archiveHash = nul
 						// Extract files from archive
 				let dataOffset = 0;
 				const extractedFiles = [];
-						for (const fileInfo of fileManifest) {
+						for (const _fileInfo of fileManifest) {
 					// Read file metadata: [name_length(4)][name][size(8)][data]
 					const nameLengthBytes = decompressed.slice(dataOffset, dataOffset + 4);
 					const nameLengthView = new DataView(nameLengthBytes.buffer);
@@ -429,9 +419,7 @@ async function decompressArchiveToFiles(volumes, fileManifest, archiveHash = nul
 // Setup file sending functionality
 // 设置文件发送功能
 export function setupFileSend({
-	inputSelector,
 	attachBtnSelector,
-	fileInputSelector,
 	onSend
 }) {
 	const attachBtn = document.querySelector(attachBtnSelector);
@@ -479,13 +467,12 @@ async function handleFilesUpload(files, onSend) {
 	
 	try {
 		// Show compression progress
-		let progressElement = null;
 		
-		function showProgress(message) {
+		function showProgress() {
 			// 删除系统提示
 		}
 		
-		function updateProgress(message) {
+		function updateProgress() {
 			// 删除系统提示
 		}
 		
@@ -544,7 +531,6 @@ async function handleFilesUpload(files, onSend) {
 			
 		} else {
 			// Multiple files upload - create archive
-			const totalSize = files.reduce((sum, file) => sum + file.size, 0);
 			showProgress();
 			
 			const { volumes, originalSize, compressedSize, archiveHash, fileCount, fileManifest } = await compressFilesToArchive(files);
@@ -737,7 +723,7 @@ function updateFileProgress(fileId) {
 // Handle incoming file messages
 // 处理接收到的文件消息
 export function handleFileMessage(message, isPrivate = false, roomIdx = null) {
-	const { type, fileId, userName } = message;
+	const { type } = message;
 
 	switch (type) {
 		case 'file_start':

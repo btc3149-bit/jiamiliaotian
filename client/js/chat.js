@@ -205,7 +205,7 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 }
 // Add a message from another user to the chat area
 // 添加来自其他用户的消息到聊天区域
-export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, msgType = 'text', timestamp = null, meta = null) {
+export function addOtherMsg(msg, userName = '', _avatar = '', isHistory = false, msgType = 'text', timestamp = null, meta = null) {
 	if (!userName && activeRoomIndex >= 0) {
 		const rd = roomsData[activeRoomIndex];
 		// 优先使用文件消息自带的 userName 字段
@@ -407,7 +407,6 @@ export function showImageModal(src) {
 	};
 	on(img, 'wheel', function(ev) {
 		ev.preventDefault();
-		const prevScale = scale;
 		scale += ev.deltaY < 0 ? 0.1 : -0.1;
 		scale = Math.max(0.2, Math.min(5, scale));
 		if (scale === 1) {
@@ -471,7 +470,6 @@ function renderFileMessage(fileData, isSender) {
 		fileId,
 		fileName,
 		originalSize,
-		totalVolumes,
 		fileCount,
 		isArchive
 	} = fileData;

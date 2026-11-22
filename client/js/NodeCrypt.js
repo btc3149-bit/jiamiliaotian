@@ -242,7 +242,7 @@ class NodeCrypt {
 					return
 				}
 			}
-		} catch (e) {}
+		} catch (e) { /* non-handshake frame — ignored by design */ }
 		if (!this.serverShared) {
 			const parts = event.data.split('|');
 			if (!parts[0] || !parts[1]) {

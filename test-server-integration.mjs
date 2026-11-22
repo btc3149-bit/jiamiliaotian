@@ -165,7 +165,7 @@ try {
 // ================= PR-4 (S-1/S-2) black-box sections =================
 // Each section uses a fresh server process (fresh per-IP windows) on its
 // own port via the S-1 env override.
-async function spawnServer(env, port) {
+async function spawnServer(env, _port) {
 	const proc = spawn('node', ['server.js'], { cwd: serverDir, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
 	let log = '';
 	proc.stdout.on('data', d => { log += d; });
@@ -285,7 +285,6 @@ async function waitClose(ws, timeout = 4000) {
 			const targets = {};
 			for (const id of others) targets[id] = 'AAAA';
 			// include the sender itself: 65 target keys in one frame
-			const selfList = members[1].decrypted.filter(m => m.a === 'l');
 			sender.send({ a: 'w', p: targets });
 			await sleep(1500);
 			let deliveries = 0;

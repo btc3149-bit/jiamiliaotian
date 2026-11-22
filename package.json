@@ -10,7 +10,8 @@
     "dev": " wrangler dev",
     "deploy": " wrangler deploy",
     "publish": " wrangler publish",
-    "build:docker": "vite build"
+    "build:docker": "vite build",
+    "lint": "eslint ."
   },
   "repository": {
     "type": "git",
@@ -26,6 +27,8 @@
   "devDependencies": {
     "autoprefixer": "^10.4.21",
     "cssnano": "^7.0.7",
+    "eslint": "^9.39.1",
+    "globals": "^16.5.0",
     "terser": "^5.39.2",
     "vite": "^6.3.5",
     "wrangler": "^4.16.1"
