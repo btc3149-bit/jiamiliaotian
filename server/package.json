@@ -5,6 +5,9 @@
   "main": "server.js",
   "author": "Zoltan Hajdu",
   "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=22 <23"
+  },
   "dependencies": {
     "bufferutil": "^4.2.0",
     "utf-8-validate": "^5.0.2",
