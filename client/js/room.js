@@ -286,7 +286,14 @@ export function joinRoom(userName, roomName, password, modal = null, onResult) {
 		onClientSync: (r) => handleClientSync(idx, r),
 		onClientReplay: (r) => handleClientReplay(idx, r),
 		onClientStatus: (r) => handleClientStatus(idx, r),
-		onClientCall: (r) => { if (window.__jmltOnCallSignal) window.__jmltOnCallSignal(r) }
+		onClientCall: (r) => { if (window.__jmltOnCallSignal) window.__jmltOnCallSignal(r) },
+		// TOFU pin could not be persisted (private browsing / storage off):
+		// warn once in-room instead of silently re-trusting every reconnect.
+		onPinPersistFailed: () => {
+			try {
+				addSystemMsg(t('security.pin_persist_failed', 'The server key pin could not be saved on this device, so it is valid for this session only.'));
+			} catch (_e) { /* room UI may not be ready yet */ }
+		}
 	};
 	const chatInst = new window.NodeCrypt(window.config, callbacks);
 	roomsData[idx].chat = chatInst;

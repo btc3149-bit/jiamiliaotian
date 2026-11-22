@@ -9,6 +9,7 @@ import {
 } from './room.js';
 import {
 	escapeHTML,
+	sanitizeImageSrc,
 	textToHTML
 } from './util.string.js';
 import {
@@ -129,7 +130,7 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 			// New multi-image format: {text: "", images: ["data:image...", "data:image..."]}
 			const messageText = text.text ? textToHTML(text.text) : '';
 			const imageElements = text.images.map(imgData => {
-				const safeImgSrc = escapeHTML(imgData).replace(/javascript:/gi, '');
+				const safeImgSrc = escapeHTML(sanitizeImageSrc(imgData));
 				return `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
 			}).join('');
 					if (messageText && imageElements) {
@@ -147,7 +148,7 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 			}
 		} else if (typeof text === 'object' && text.image) {
 			// Legacy single image format: {text: "", image: "data:image..."}
-			const safeImgSrc = escapeHTML(text.image).replace(/javascript:/gi, '');
+			const safeImgSrc = escapeHTML(sanitizeImageSrc(text.image));
 			const messageText = text.text ? textToHTML(text.text) : '';
 			
 			if (messageText) {
@@ -162,7 +163,7 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 			}
 		} else {
 			// Legacy format: plain image data URL
-			const safeImgSrc = escapeHTML(text).replace(/javascript:/gi, '');
+			const safeImgSrc = escapeHTML(sanitizeImageSrc(text));
 			contentHtml = `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
 		}
 	} else if (msgType === 'file' || msgType === 'file_private') {
@@ -228,7 +229,7 @@ export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, 
 			// New multi-image format: {text: "", images: ["data:image...", "data:image..."]}
 			const messageText = msg.text ? textToHTML(msg.text) : '';
 			const imageElements = msg.images.map(imgData => {
-				const safeImgSrc = escapeHTML(imgData).replace(/javascript:/gi, '');
+				const safeImgSrc = escapeHTML(sanitizeImageSrc(imgData));
 				return `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
 			}).join('');
 					if (messageText && imageElements) {
@@ -246,7 +247,7 @@ export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, 
 			}
 		} else if (typeof msg === 'object' && msg.image) {
 			// Legacy single image format: {text: "", image: "data:image..."}
-			const safeImgSrc = escapeHTML(msg.image).replace(/javascript:/gi, '');
+			const safeImgSrc = escapeHTML(sanitizeImageSrc(msg.image));
 			const messageText = msg.text ? textToHTML(msg.text) : '';
 			
 			if (messageText) {
@@ -261,7 +262,7 @@ export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, 
 			}
 		} else {
 			// Legacy format: plain image data URL
-			const safeImgSrc = escapeHTML(msg).replace(/javascript:/gi, '');
+			const safeImgSrc = escapeHTML(sanitizeImageSrc(msg));
 			contentHtml = `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
 		}
 	} else if (msgType === 'file' || msgType === 'file_private') {
@@ -389,7 +390,7 @@ export function setupImagePreview() {
 export function showImageModal(src) {
 	const modal = createElement('div', {
 		class: 'img-modal-bg'
-	}, `<div class="img-modal-blur"></div><div class="img-modal-content img-modal-content-overflow"><img src="${src}"class="img-modal-img"/><span class="img-modal-close">&times;</span></div>`);
+	}, `<div class="img-modal-blur"></div><div class="img-modal-content img-modal-content-overflow"><img src="${escapeHTML(sanitizeImageSrc(src))}"class="img-modal-img"/><span class="img-modal-close">&times;</span></div>`);
 	document.body.appendChild(modal);
 	on($('.img-modal-close', modal), 'click', () => modal.remove());
 	on(modal, 'click', (e) => {
