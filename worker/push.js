@@ -81,7 +81,16 @@ export async function sendWebPush(endpoint, vapid) {
 // are stored in DO storage, so they get the same input hardening as anything
 // else: https only, length cap. (Worker outbound fetch is not CSP-bound, but
 // we still refuse anything that is not a real push-service URL shape.)
+// S-3: on top of the shape checks, the hostname must be a known push-service
+// host — exact match for FCM / Mozilla, label-boundary suffix for Apple /
+// Microsoft. android.googleapis.com (legacy FCM) is deliberately NOT listed.
 // 端点准入校验：仅 https、限长；订阅端点属于外部输入，照常加固。
+// S-3：在形状校验之上，主机必须命中已知推送服务白名单——FCM/Mozilla 精确
+// 匹配，Apple/Microsoft 以 '.' 开头后缀做标签边界匹配；旧版 FCM 主机
+// android.googleapis.com 按拍板不加。
+const PUSH_EXACT_HOSTS = new Set(['fcm.googleapis.com', 'updates.push.services.mozilla.com']);
+const PUSH_SUFFIX_HOSTS = ['.push.apple.com', '.notify.windows.com'];
+
 export function isAcceptableEndpoint(endpoint) {
 	if (typeof endpoint !== 'string' || endpoint.length < 20 || endpoint.length > 500) {
 		return false;
@@ -94,7 +103,23 @@ export function isAcceptableEndpoint(endpoint) {
 	}
 	if (parsed.protocol !== 'https:') return false;
 	if (parsed.username || parsed.password) return false;
-	return true;
+	// Port must be default https (empty after URL normalisation) or explicit 443.
+	// 端口须为空（默认）或显式 443。
+	if (parsed.port !== '' && parsed.port !== '443') return false;
+	const hostname = parsed.hostname.toLowerCase();
+	if (!hostname || hostname.endsWith('.')) return false;
+	// Reject IP literals (IPv4 dotted quad, or IPv6 which contains ':').
+	// 拒绝 IP 字面量：IPv4 点分四段，或含 ':' 的 IPv6。
+	if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.includes(':')) return false;
+	if (PUSH_EXACT_HOSTS.has(hostname)) return true;
+	// Suffix entries start with '.', so endsWith enforces a label boundary:
+	// evilpush.apple.com / fakepush.apple.com / bare push.apple.com all miss,
+	// and *.push.apple.com.evil.com misses because the suffix is not at the end.
+	// 后缀以 '.' 开头，endsWith 即标签边界匹配（禁止 includes/startsWith 语义）。
+	for (const suffix of PUSH_SUFFIX_HOSTS) {
+		if (hostname.length > suffix.length && hostname.endsWith(suffix)) return true;
+	}
+	return false;
 }
 
 function logPushError(source, error) {

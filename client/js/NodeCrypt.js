@@ -355,7 +355,14 @@ class NodeCrypt {
 				// Remember the peer's public key so both sides can compute and
 				// compare the same ECDH channel fingerprint (see getPeerFingerprint).
 				this.channel[serverDecrypted.c].peerPub = serverDecrypted.p;
-				this.channel[serverDecrypted.c].shared = Buffer.from(this.xorHex(this.channel[serverDecrypted.c].keys.derive(this.clientEc.keyFromPublic(serverDecrypted.p, 'hex').getPublic()).toString('hex').padEnd(64, '8').substr(0, 64), this.credentials.password), 'hex');
+				// E-5: reject degenerate (all-zero) ECDH shared secrets — do not
+				// set shared, do not send 'u'; abort via the existing failure path.
+				const sharedHex = this.deriveSharedHex(this.channel[serverDecrypted.c].keys, serverDecrypted.p);
+				if (sharedHex === null) {
+					this.logEvent('onMessage-client', 'degenerate peer public key rejected', 'error');
+					return
+				}
+				this.channel[serverDecrypted.c].shared = Buffer.from(this.xorHex(sharedHex, this.credentials.password), 'hex');
 				this.sendMessage(this.encryptServerMessage({
 					a: 'c',
 					p: this.encryptClientMessage({
@@ -599,7 +606,13 @@ class NodeCrypt {
 					return
 				}
 				try {
-					const newRoot = Buffer.from(this.xorHex(ch.keys.derive(this.clientEc.keyFromPublic(clientDecrypted.pub, 'hex').getPublic()).toString('hex').padEnd(64, '8').substr(0, 64), this.credentials.password), 'hex');
+					// E-5: reject degenerate (all-zero) ECDH shared secrets — do
+					// not seedRoot, do not reply 'rka'.
+					const rkSharedHex = this.deriveSharedHex(ch.keys, clientDecrypted.pub);
+					if (rkSharedHex === null) {
+						return
+					}
+					const newRoot = Buffer.from(this.xorHex(rkSharedHex, this.credentials.password), 'hex');
 					if (!ch.ratchet.seedRoot(clientDecrypted.g, new Uint8Array(newRoot))) {
 						return
 					}
@@ -1492,7 +1505,12 @@ class NodeCrypt {
 		try {
 			const rekeyPair = this.clientEc.genKeyPair();
 			const newPub = rekeyPair.getPublic('hex');
-			const newRoot = Buffer.from(this.xorHex(rekeyPair.derive(this.clientEc.keyFromPublic(ch.peerPub, 'hex').getPublic()).toString('hex').padEnd(64, '8').substr(0, 64), this.credentials.password), 'hex');
+			// E-5: reject degenerate (all-zero) ECDH shared secrets.
+			const rekeySharedHex = this.deriveSharedHex(rekeyPair, ch.peerPub);
+			if (rekeySharedHex === null) {
+				return false
+			}
+			const newRoot = Buffer.from(this.xorHex(rekeySharedHex, this.credentials.password), 'hex');
 			const gen = ch.ratchet.activeGeneration() + 1;
 			if (!ch.ratchet.seedRoot(gen, new Uint8Array(newRoot))) {
 				return false
@@ -1531,6 +1549,28 @@ class NodeCrypt {
 			this.logEvent('getPeerFingerprint', error, 'error');
 			return null
 		}
+	}
+
+	// E-5: Curve25519 ECDH shared-secret derivation with an all-zero check.
+	// A low-order / degenerate peer public key makes the shared secret
+	// collapse (all zero), which would silently reduce the channel/root key
+	// to the password factor alone — reject it (return null) instead.
+	// NOTE: the all-zero test must run on the RAW derive hex ('0' for a zero
+	// BN) BEFORE the legacy padEnd(64, '8') formatting, which would insert
+	// '8' characters and mask the zero. For every non-degenerate result the
+	// returned string is byte-identical to the historical inline expression.
+	// Unit-testable as a NodeCrypt instance method (see test-crypto.mjs).
+	// E-5：Curve25519 ECDH 共享秘密派生 + 全零校验。低阶/退化对端公钥会使
+	// 共享秘密塌缩（全零），通道/根密钥将静默退化为仅口令因子——故拒绝
+	// （返回 null）。全零判定必须在 padEnd(64,'8') 格式化之前的原始 hex 上
+	// 做，否则 '8' 会掩盖全零；非退化结果与历史内联表达式逐字节一致。
+	// 可单测：NodeCrypt 实例方法（见 test-crypto.mjs）。
+	deriveSharedHex(myKeys, peerPubHex) {
+		try {
+			const rawHex = myKeys.derive(this.clientEc.keyFromPublic(peerPubHex, 'hex').getPublic()).toString('hex');
+			if (!/[1-9a-f]/.test(rawHex)) return null; // all-zero = low-order / degenerate shared secret
+			return rawHex.padEnd(64, '8').substr(0, 64);
+		} catch (_e) { return null; }
 	}
 
 	// XOR two hex strings
