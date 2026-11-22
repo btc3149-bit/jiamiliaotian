@@ -29,7 +29,7 @@
   "homepage": "https://github.com/btc3149-bit/jiamiliaotian#readme",
   "devDependencies": {
     "autoprefixer": "^10.7.0",
-    "cssnano": "^7.1.9",
+    "cssnano": "^9.9.0",
     "eslint": "^9.39.1",
     "globals": "^16.5.0",
     "terser": "^5.51.4",
