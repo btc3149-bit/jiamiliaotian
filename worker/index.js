@@ -630,6 +630,18 @@ export class ChatRoom {  constructor(state, env) {
     try {
       if (!this.env || !this.env.VAPID_STORE) return;
       const subs = await this.getPushSubs();
+      // S-3 stock cleanup: re-validate stored endpoints against the current
+      // allowlist before throttling; non-conforming endpoints are pruned via
+      // the same delete-and-write-back path used for dead (404/410) endpoints
+      // below. Runs before the throttle filter so a fully-stale set is still
+      // cleaned even when nothing is due.
+      // S-3 存量清理：节流过滤前对存量端点跑新版白名单校验，不合规者按与
+      // 404/410 失效端点相同的「删除 + 回写」路径清理。
+      const staleEndpoints = Object.keys(subs).filter((ep) => !isAcceptableEndpoint(ep));
+      if (staleEndpoints.length > 0) {
+        for (const ep of staleEndpoints) delete subs[ep];
+        await this.state.storage.put('pushSubs', subs);
+      }
       const now = Date.now();
       const due = Object.keys(subs).filter((ep) => {
         const last = this.pushThrottle[ep] || 0;
