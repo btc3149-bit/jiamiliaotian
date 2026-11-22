@@ -177,7 +177,7 @@ updateStaticTexts();
 registerBridge('addSystemMsg', addSystemMsg);
 registerBridge('addOtherMsg', addOtherMsg);
 registerBridge('joinRoom', joinRoom);
-window.notifyMessage = notifyMessage;
+registerBridge('notifyMessage', notifyMessage);
 window.setupEmojiPicker = setupEmojiPicker;
 window.handleFileMessage = handleFileMessage;
 window.downloadFile = downloadFile;
