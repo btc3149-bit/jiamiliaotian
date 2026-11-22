@@ -18,22 +18,55 @@
 npm ci --ignore-scripts
 npm run build
 
-# 2. 派生平台图标（.ico/.icns 从 1024 源图生成）
-npx @tauri-apps/cli icon desktop/src-tauri/icons/icon-source.png -o desktop/src-tauri/icons
+# 2. 安装钉版 Tauri CLI（desktop/package.json 里锁定的 @tauri-apps/cli 预编译
+#    二进制；不要再用 cargo 从源码编译 CLI，CI 同此路径）
+cd desktop
+npm ci --ignore-scripts
 
-# 3. 构建（产物在 desktop/src-tauri/target/release/bundle/）
-cd desktop/src-tauri
-cargo install tauri-cli --version '^2' --locked
-cargo tauri build
+# 3. 派生平台图标（.ico/.icns 从 1024 源图生成）
+npx tauri icon src-tauri/icons/icon-source.png -o src-tauri/icons
+
+# 4. 构建（产物在 desktop/src-tauri/target/release/bundle/）
+npx tauri build
 
 # 开发模式（热重载，先跑过第 1 步）
-cargo tauri dev
+npx tauri dev
 ```
 
 ## CI 构建
 
 `.github/workflows/desktop.yml`：手动触发或推 `v*` tag → 三平台构建 → artifacts 上传。
 macOS 产物为 ad-hoc 签名（未加入 Apple 开发者计划），首次打开需右键 → 打开。
+
+## 下载校验（SHA-256 + 构建来源证明）
+
+tag 发布时，每个平台的安装包都附带一份 `SHA256SUMS-<平台>.txt`，且产物带有
+GitHub 构建来源证明（artifact attestation，无自持签名密钥，由 GitHub 的
+Sigstore 身份签发）。安装前建议校验：
+
+```bash
+# 1. 校验文件完整性（与安装包放在同一目录执行）
+sha256sum -c SHA256SUMS-windows.txt        # Windows(Git Bash)/Linux 改对应文件名
+shasum -a 256 -c SHA256SUMS-macos-arm64.txt # macOS
+
+# 2. 验证构建来源（需 GitHub CLI 并登录）
+gh attestation verify <安装包文件> --owner btc3149-bit
+```
+
+## 未签名安装包警告与绕过（三平台）
+
+桌面安装包**未购买代码签名证书**：Windows 未签名、macOS 仅 ad-hoc 签名、
+未做 Apple 公证。首次安装/打开时系统会报警，这是预期行为，按下面步骤绕过即可
+（前提：安装包来自本仓库的 GitHub Release 且已通过上面的校验）：
+
+- **Windows（SmartScreen）**：双击安装包后出现「Windows 已保护你的电脑」→
+  点「更多信息」→「仍要运行」。
+- **macOS（Gatekeeper）**：提示「无法打开，因为它来自身份不明的开发者」或
+  「已损坏」→ 在 Finder 里右键（或 Control+点击）应用 →「打开」→ 再点「打开」；
+  或终端执行 `xattr -dr com.apple.quarantine /Applications/jiamiliaotian.app`
+  去除隔离属性。
+- **Linux**：`.deb` 用 `sudo dpkg -i <文件>` 或软件中心安装，无签名拦截；
+  `.AppImage` 需先 `chmod +x <文件>` 赋予执行权限再运行。
 
 # 移动端脚手架 / Mobile (Tauri 2)
 
@@ -53,12 +86,13 @@ Tauri 2 同一代码库可出 Android/iOS。**注意：移动端构建无法在 
 ## Android
 
 ```bash
-# 前置：Android Studio（SDK + NDK）、Rust、JDK 17
+# 前置：Android Studio（SDK + NDK）、Rust、JDK 17；先在 desktop/ 下跑过
+# 本地构建第 2 步（npm ci 装钉版 Tauri CLI），以下命令均在 desktop/ 下执行
 rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
-npx @tauri-apps/cli android init   # 在 desktop/ 下生成 gen/android 工程
-npm run build                       # web client
-npx @tauri-apps/cli android dev     # 真机调试
-npx @tauri-apps/cli android build   # 产出 APK/AAB（自动签名用 debug keystore；发布需自建 keystore）
+npx tauri android init   # 在 desktop/ 下生成 gen/android 工程
+npm run build                       # web client（仓库根目录执行）
+npx tauri android dev     # 真机调试
+npx tauri android build   # 产出 APK/AAB（自动签名用 debug keystore；发布需自建 keystore）
 ```
 
 ## Android 正式签名与 Google Play 上架（v1.7.0 #18）
@@ -103,10 +137,10 @@ keytool -genkey -v -keystore upload-keystore.jks -keyalg RSA -keysize 2048 -vali
 ```bash
 # 前置：macOS + Xcode + Apple 开发者账号（$99/年，真机/上架必需）
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim
-npx @tauri-apps/cli ios init
+npx tauri ios init
 npm run build
-npx @tauri-apps/cli ios dev
-npx @tauri-apps/cli ios build
+npx tauri ios dev
+npx tauri ios build
 ```
 
 ## 移动端安全提示

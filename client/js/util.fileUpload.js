@@ -3,6 +3,7 @@
 
 import {
 	$,
+	createElement,
 	$id,
 	createElementHTML,
 	on,
@@ -12,12 +13,12 @@ import {
 import { formatFileSize } from './util.file.js';
 import { escapeHTML } from './util.string.js';
 import { t } from './util.i18n.js';
+import { callBridge, hasBridge } from './util.bridge.js';
 
 // File upload modal state
 // 文件上传模态框状态
 let uploadModal = null;
 let selectedFiles = new Map();
-let fileIdCounter = 0;
 let onSendCallback = null;
 
 // Listen for language changes to update modal text
@@ -74,13 +75,16 @@ function updateModalTexts() {
 		// Re-attach browse button event
 		const browseBtn = dragDropText.querySelector('.file-browse-btn');
 		if (browseBtn) {
-			on(browseBtn, 'click', handleBrowseClick);
+			on(browseBtn, 'click', () => {
+				const fileInput = uploadModal.querySelector('#file-upload-input');
+				if (fileInput) fileInput.click()
+			});
 		}
 	}
 	
 	// Update summary if files are selected
 	if (selectedFiles.size > 0) {
-		updateFileListDisplay();
+		updateFileList();
 	}
 }
 
@@ -357,8 +361,8 @@ async function handleSendFiles() {
 		
 	} catch (error) {
 		console.error('Error sending files:', error);
-		if (window.addSystemMsg) {
-			window.addSystemMsg(`${t('system.file_send_failed', 'Failed to send files:')} ${error.message}`);
+		if (hasBridge('addSystemMsg')) {
+			callBridge('addSystemMsg', `${t('system.file_send_failed', 'Failed to send files:')} ${error.message}`);
 		}
 	}
 }

@@ -31,6 +31,8 @@ Access http://localhost:80
 | Web Push endpoints (/api/vapid etc.) | ✅ | ❌ Node does not implement /api/vapid or push relay: subscription requests reported over the encrypted channel are silently ignored (no error, no notification) — this is not “subscribed but undelivered” |
 | Read receipts / reconnect catch-up | ✅ | ✅ (shared protocol layer) |
 | Security response headers (CSP etc.) | ✅ | ✅ Aligned (all five headers, incl. CSP/Permissions-Policy, match Workers item by item) |
+| Static asset compression | ✅ Automatic at the Cloudflare edge (gzip/Brotli) | ⚠️ Different mechanism: the image's nginx runs `gzip on` (js/css/html/svg/fonts); no Brotli |
+| Health endpoint | ❌ None (platform probes) | ✅ Node relay serves `GET /healthz` (bare 200 + `ok`, no business metadata); used by the image HEALTHCHECK and compose; if node or nginx dies the container exits instead of looking healthy |
 | TLS / HSTS | ✅ Cloudflare edge | ⚠️ Image serves HTTP 80 only; TLS and HSTS are the front reverse proxy's job (see TLS note below) |
 | Room sharding / horizontal scaling | ✅ Sharded per DO | ❌ Single process |
 | Server key rotation / migration signature | ✅ 24h rotation + 48h old-key migration signature | ❌ Node has no 24h rotation or migration signature: the RSA key is generated at process start and changes on every restart; pinned clients will hit a key mismatch, disconnect, and must confirm a pin reset to reconnect. Restarting the Node server means every member must re-confirm the server key |
