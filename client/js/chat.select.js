@@ -9,7 +9,7 @@
 
 import { roomsData, activeRoomIndex } from './room.js';
 import { escapeHTML } from './util.string.js';
-import { $id, createElement, on, addClass, removeClass } from './util.dom.js';
+import { $id, createElement, createElementHTML, on, addClass, removeClass } from './util.dom.js';
 import { t } from './util.i18n.js';
 
 let notifySystem = () => {};
@@ -80,7 +80,7 @@ function renderSelectBar() {
 		return
 	}
 	if (!bar) {
-		bar = createElement('div', { id: 'jmlt-select-bar', class: 'jmlt-select-bar' }, [
+		bar = createElementHTML('div', { id: 'jmlt-select-bar', class: 'jmlt-select-bar' }, [
 			'<span class="jmlt-sel-count"></span>',
 			'<button type="button" class="jmlt-sel-copy"></button>',
 			'<button type="button" class="jmlt-sel-forward"></button>',
@@ -157,7 +157,7 @@ function doForwardSelected() {
 		notifySystem(t('search.no_other_rooms', 'Open another room first to forward messages.'), true);
 		return
 	}
-	const modal = createElement('div', { class: 'file-upload-modal show' }, [
+	const modal = createElementHTML('div', { class: 'file-upload-modal show' }, [
 		'<div class="file-upload-overlay"></div>',
 		'<div class="file-upload-container">',
 		'<div class="file-upload-header"><h3>' + escapeHTML(t('search.forward_to', 'Forward to…')) + '</h3><button class="file-upload-close jmlt-fwd-close">&times;</button></div>',
