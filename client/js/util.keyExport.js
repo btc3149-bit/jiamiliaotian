@@ -17,6 +17,7 @@ import { t } from './util.i18n.js';
 export const MIGRATION_MAGIC = 'JMLTK';       // 5-byte ASCII magic
 export const MIGRATION_VERSION = 1;
 export const MIGRATION_TTL_MS = 10 * 60 * 1000; // QR/file valid for 10 minutes
+export const MIGRATION_KEY_MIN_LEN = 12; // migration key: min 12 Unicode code points (export side only)
 
 // ---- base64 helpers (binary-safe, browser + Node 18+) ----
 export function bytesToB64(bytes) {
@@ -92,6 +93,13 @@ export function validateMigrationPayload(payload, nowMs = Date.now()) {
 
 // ---- encrypt / decrypt (container: magic + version + salt16 + iv12 + ct) ----
 export async function encryptMigration(payloadObj, keyString) {
+	// Strength is enforced HERE (single point) before any key derivation, so
+	// no caller can bypass it. decryptMigration is intentionally unchanged:
+	// old containers made with weak keys must still open.
+	// 强度在此单点强制（派生之前），任何调用方都绕不过；decryptMigration
+	// 刻意不加此校验，旧弱口令容器仍须可解。
+	if (typeof keyString !== 'string' || [...keyString].length < MIGRATION_KEY_MIN_LEN)
+		throw new Error('weak-key');
 	const json = JSON.stringify(payloadObj);
 	const enc = new TextEncoder();
 	const salt = crypto.getRandomValues(new Uint8Array(16));
