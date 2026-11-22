@@ -47,6 +47,10 @@ check('en README discloses legacy replay scope', en.includes('Scope of Replay Pr
 console.log('=== test-docs: default server attribution (D-4) ===');
 check('zh README attributes default server domain', zh.includes('chat.68626.us.ci') && zh.includes('项目方自有部署'));
 
+console.log('=== test-docs: S-4 share hand-off disclosure (PR-8) ===');
+check('zh README documents the share-cache residual deviation', zh.includes('系统分享交接的残留偏差') && zh.includes('jmlt-share-v1') && zh.includes('5 分钟'));
+check('en README documents the share-cache residual deviation', en.includes('Residual Deviation in the System-Share Hand-off') && en.includes('jmlt-share-v1') && en.includes('5-minute TTL'));
+
 console.log('=== test-docs: docker security headers (K-1, PR-2) ===');
 check('docker CSP has media-src with data:', dockerfile.includes("media-src 'self' data: blob:"));
 check('docker Permissions-Policy allows self camera/mic', dockerfile.includes('camera=(self), microphone=(self)'));
