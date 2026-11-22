@@ -263,7 +263,7 @@ registerBridge('openLoginPrefill', openLoginPrefill);
 let callManager = null;
 registerBridge('onCallSignal', (r) => { if (callManager) callManager.handleSignal(r) });
 registerBridge('onCallPeerLeft', (clientId) => { if (callManager) callManager.handlePeerLeft(clientId) });
-window.__jmltUpdateCallBtn = () => {
+registerBridge('updateCallBtn', () => {
 	// v1.9.2: two call buttons — 📞 voice / 🎥 video — both gated on having a
 	// private-chat target. / 双通话按钮，均以私聊对象为可见前提。
 	for (const sel of ['.chat-call-btn', '.chat-video-btn']) {
@@ -272,7 +272,7 @@ window.__jmltUpdateCallBtn = () => {
 		const rd = roomsData[activeRoomIndex];
 		btn.style.display = (rd && rd.privateChatTargetId) ? '' : 'none';
 	}
-};
+});
 
 // 当 DOM 内容加载完成后执行初始化逻辑
 // Run initialization logic when the DOM content is fully loaded

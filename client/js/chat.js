@@ -37,6 +37,7 @@ import {
 } from './util.voice.js';
 // v1.3.0 #8: whitelisted markdown rendering for text messages
 import { markdownToHtml } from './util.markdown.js';
+import { callBridge } from './util.bridge.js';
 
 // v1.2.0 #9: render a validated voice payload as an inline audio player.
 // data: URL is escaped and javascript: stripped (same treatment as images).
@@ -368,9 +369,7 @@ export function updateChatInputStyle() {
 	// Hook is set by main.js (avoids a chat.js → call-manager import cycle).
 	// v1.5.0 #16：通话按钮仅在有私聊对象时可见。钩子由 main.js 设置
 	//（避免 chat.js → 通话管理器的导入环）。
-	if (window.__jmltUpdateCallBtn) {
-		try { window.__jmltUpdateCallBtn() } catch (_e) { /* best-effort */ }
-	}
+	try { callBridge('updateCallBtn') } catch (_e) { /* best-effort */ }
 }
 
 // Setup image preview functionality
