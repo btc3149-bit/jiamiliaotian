@@ -23,7 +23,7 @@ import {
 	markMessageReadDom
 } from './chat.js';
 import { reportPushSubscription } from './util.push.js';
-import { selectReplayable, dedupeReplayBatch } from './util.validate.js';
+import { selectReplayable, dedupeReplayBatch, isValidReactionEmoji } from './util.validate.js';
 // v1.2.0 #11: offline send queue flush
 import { flushSendQueue } from './util.sendQueue.js';
 // v1.3.0 #6: local-only room metadata (alias/group/pinned)
@@ -500,7 +500,8 @@ export function handleClientReaction(idx, r) {
 	if (!rd || !r || !r.targetId || !r.emoji) return;
 	// SECURITY: whitelist-validate remote fields before touching state/DOM
 	if (!/^[A-Za-z0-9]{8,32}$/.test(r.targetId)) return;
-	if (typeof r.emoji !== 'string' || !r.emoji || r.emoji.length > 16) return;
+	// Item 20: single-grapheme validation (ZWJ sequences / flags count as one)
+	if (!isValidReactionEmoji(r.emoji)) return;
 	toggleReactionLocal(rd, r.targetId, r.emoji, r.clientId);
 	if (activeRoomIndex === idx) {
 		renderReactions(r.targetId)

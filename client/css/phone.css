@@ -54,6 +54,21 @@
 		padding: 16px 4px 88px 4px;
 	}
 
+	/* Item 19: top safe area — with viewport-fit=cover (index.html) the
+	   env() insets become real on notched iOS devices; pad the top chrome
+	   (main header + full-height drawers) so nothing hides under the notch.
+	   NOTE: visual effect needs a real iOS device to verify. */
+	.main-header {
+		padding-top: env(safe-area-inset-top, 0px);
+	}
+
+	.sidebar,
+	.rightbar,
+	.settings-sidebar {
+		padding-top: env(safe-area-inset-top, 0px);
+		box-sizing: border-box;
+	}
+
 	.chat-input-area {
 		position: fixed;
 		left: 0;

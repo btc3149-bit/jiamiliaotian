@@ -10,6 +10,51 @@ export function isValidMid(id) {
 	return typeof id === 'string' && /^[A-Za-z0-9]{8,32}$/.test(id)
 }
 
+// Reaction emoji validation (item 20): a reaction must be EXACTLY ONE
+// grapheme cluster — a ZWJ sequence (e.g. family emoji), a flag pair, or a
+// base + skin-tone / variation-selector sequence all count as one — within
+// a hard length cap. Anything else (plain text, multiple emoji, whitespace,
+// markup) is rejected. Senders validate before sending; receivers
+// re-validate before touching state/DOM (RULES.md invariant 5 posture).
+// 回应 emoji 校验：必须恰好是一个 grapheme 簇（ZWJ 序列、国旗、肤色/变体
+// 选择符序列均算一个），且有硬长度上限；纯文本、多 emoji、空白、标记一律拒绝。
+export const REACTION_EMOJI_MAX_LENGTH = 32; // UTF-16 code units
+export function countGraphemes(s) {
+	if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
+		const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+		let n = 0;
+		for (const _part of seg.segment(s)) { n++; if (n > 1) break }
+		return n
+	}
+	// Fallback (no Intl.Segmenter): count code points, treating ZWJ-joined
+	// sequences, variation selectors, skin-tone modifiers and regional
+	// indicator pairs as part of the preceding grapheme.
+	const cps = Array.from(s);
+	let n = 0;
+	for (let i = 0; i < cps.length; i++) {
+		const cp = cps[i].codePointAt(0);
+		if (cp === 0x200D) { // ZWJ joins the next code point into this grapheme
+			i++;
+			continue
+		}
+		if (cp === 0xFE0E || cp === 0xFE0F) continue; // variation selectors
+		if (cp >= 0x1F3FB && cp <= 0x1F3FF) continue; // skin tones
+		if (cp >= 0xE0020 && cp <= 0xE007F) continue; // tag characters (subdivision flags)
+		if (cp >= 0x1F1E6 && cp <= 0x1F1FF && i + 1 < cps.length) { // flag pair
+			const next = cps[i + 1].codePointAt(0);
+			if (next >= 0x1F1E6 && next <= 0x1F1FF) { n++; i++; continue }
+		}
+		n++
+	}
+	return n
+}
+export function isValidReactionEmoji(e) {
+	if (typeof e !== 'string' || e.length === 0 || e.length > REACTION_EMOJI_MAX_LENGTH) return false;
+	if (/\s/.test(e)) return false;
+	if (!/\p{Emoji}/u.test(e)) return false; // must actually be emoji-ish, not a lone letter/digit
+	return countGraphemes(e) === 1
+}
+
 // Sanitize one wire-format replay entry (from the 'rs' action). Returns a
 // clean entry, or null when the entry must be dropped.
 // 消毒单条重播条目（'rs' action 载荷），不合法返回 null。

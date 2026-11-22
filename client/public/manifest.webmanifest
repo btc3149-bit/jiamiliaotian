@@ -23,6 +23,19 @@
 			]
 		}
 	},
+	"screenshots": [
+		{ "src": "screenshots/placeholder-wide.png", "sizes": "1280x720", "type": "image/png", "form_factor": "wide", "label": "Placeholder — real screenshots pending (see docs/images/)" },
+		{ "src": "screenshots/placeholder-narrow.png", "sizes": "720x1280", "type": "image/png", "form_factor": "narrow", "label": "Placeholder — real screenshots pending (see docs/images/)" }
+	],
+	"shortcuts": [
+		{
+			"name": "打开加米辽田 / Open Jiamiliaotian",
+			"short_name": "加米辽田",
+			"description": "Open the app and enter a room",
+			"url": "./",
+			"icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+		}
+	],
 	"icons": [
 		{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
 		{ "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },

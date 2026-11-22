@@ -1109,13 +1109,13 @@ export async function previewFile(fileId) {
 					window.addSystemMsg && window.addSystemMsg(t('file.save_unsupported', 'This app environment cannot save files — long-press the preview image instead.'), true);
 				}
 			} catch (err) {
-				window.addSystemMsg && window.addSystemMsg('Save failed: ' + (err && err.message || err), true);
+				window.addSystemMsg && window.addSystemMsg(t('file.save_failed', 'Save failed') + ': ' + (err && err.message || err), true);
 			} finally {
 				saveBtn.disabled = false;
 			}
 		});
 	} catch (error) {
-		window.addSystemMsg && window.addSystemMsg('Preview failed: ' + (error && error.message || error), true);
+		window.addSystemMsg && window.addSystemMsg(t('file.preview_failed', 'Preview failed') + ': ' + (error && error.message || error), true);
 		if (overlay) overlay.remove();
 	}
 }

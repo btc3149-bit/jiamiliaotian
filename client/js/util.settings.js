@@ -23,6 +23,9 @@ import { applyDarkModeSetting } from './util.darkmode.js';
 import { clearAllLocalHistory } from './util.localHistory.js';
 // P1-C: Web Push (generic, payload-free notifications)
 import { enablePush, disablePush, isPushEnabled, isPushSupported } from './util.push.js';
+// Item 18: PWA install entry — consumes the prompt captured by util.pwa.js
+// (previously promptInstall() had zero callers in the whole repo).
+import { promptInstall, canInstall, isStandalone, isIOSDevice } from './util.pwa.js';
 // v1.1.0 #2: panic wipe (double-confirmed local data removal)
 import { panicWipeWithConfirm } from './util.panic.js';
 // v1.3.0 #6: local room metadata (alias/group/pinned)
@@ -174,6 +177,23 @@ function setupSettingsPanel() {
 	if (settingsTitle) {
 		settingsTitle.textContent = t('settings.title', 'Settings');
 	}// Create settings content HTML
+	// Item 18: install section state — button only fires the browser prompt
+	// on an explicit tap (never a first-visit banner); iOS gets manual
+	// "Add to Home Screen" steps since it has no install prompt API.
+	const pwaStandalone = isStandalone();
+	const pwaCanInstall = canInstall();
+	const iosGuideHtml = (isIOSDevice() && !pwaStandalone) ? `
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.ios_install_title', 'Add to Home Screen (iPhone / iPad)')}</div>
+					<div class="settings-item-desc">${t('settings.ios_install_step1', '1. Tap the Share button in Safari\'s toolbar.')}<br>${t('settings.ios_install_step2', '2. Scroll down and tap "Add to Home Screen".')}<br>${t('settings.ios_install_step3', '3. Tap "Add" — the app icon appears on your home screen.')}</div>
+				</div>
+			</div>` : '';
+	const installDesc = pwaStandalone
+		? t('settings.install_installed', 'Already installed — you are running the installed app right now.')
+		: (pwaCanInstall
+			? t('settings.install_app_desc', 'Install this app on your device for quick access and offline push. Nothing ever pops up on its own — installation only happens when you tap the button below.')
+			: t('settings.install_unavailable', 'The install prompt is not available right now (the app may already be installed, or this browser does not offer installation). On iPhone/iPad, follow the manual steps below.'));
 	settingsContent.innerHTML = `
 		<div class="settings-section">
 			<div class="settings-section-title">${t('settings.notification', 'Notification Settings')}</div>
@@ -206,6 +226,16 @@ function setupSettingsPanel() {
 			</label>
 		</div>
 	</div>
+		<div class="settings-section">
+			<div class="settings-section-title">${t('settings.install_app', 'Install App')}</div>
+			<div class="settings-item">
+				<div class="settings-item-label">
+					<div>${t('settings.install_app', 'Install App')}</div>
+					<div class="settings-item-desc" id="settings-install-desc">${installDesc}</div>
+				</div>
+				<button type="button" id="settings-install-app" class="settings-danger-btn" style="background:#357ae8;color:#fff" ${(!pwaCanInstall || pwaStandalone) ? 'disabled' : ''}>${t('settings.install_btn', 'Install App')}</button>
+			</div>${iosGuideHtml}
+		</div>
 		<div class="settings-section">
 			<div class="settings-section-title">${t('settings.appearance_privacy', 'Appearance & Privacy')}</div>
 			<div class="settings-item">
@@ -448,7 +478,7 @@ function setupSettingsPanel() {
 		const checked = e.target.checked;
 		if (checked) {
 			if (!('Notification' in window)) {
-				alert('Notifications are not supported by your browser.');
+				alert(t('settings.notify_unsupported', 'Notifications are not supported by your browser.'));
 				e.target.checked = false;
 				return
 			}
@@ -460,8 +490,8 @@ function setupSettingsPanel() {
 					saveSettings(settings);
 					applySettings(settings);					// 防止重复通知，添加一个标志位
 					if (!settingsSidebar._notificationShown) {
-						new Notification('Notifications enabled', {
-							body: 'You will receive alerts here.'
+						new Notification(t('settings.notify_enabled_title', 'Notifications enabled'), {
+							body: t('settings.notify_enabled_body', 'You will receive alerts here.')
 						});
 						settingsSidebar._notificationShown = true; // 设置标志位
 					}
@@ -470,7 +500,7 @@ function setupSettingsPanel() {
 					e.target.checked = false;
 					saveSettings(settings);
 					applySettings(settings);
-					alert('Please allow notifications in your browser settings.')
+					alert(t('settings.notify_denied', 'Please allow notifications in your browser settings.'))
 				}
 			})
 		} else {
@@ -518,6 +548,25 @@ function setupSettingsPanel() {
 			disablePush().catch(() => { /* best-effort */ })
 		}
 	});
+	// Item 18: PWA install button — explicit tap only, never a banner.
+	const installBtn = $('#settings-install-app', settingsContent);
+	on(installBtn, 'click', async () => {
+		const accepted = await promptInstall();
+		const desc = $('#settings-install-desc', settingsContent);
+		if (accepted) {
+			if (desc) desc.textContent = t('settings.install_accepted', 'App installed. You can now enable offline push in the notification settings.');
+			installBtn.disabled = true;
+		} else if (desc) {
+			desc.textContent = t('settings.install_unavailable', 'The install prompt is not available right now (the app may already be installed, or this browser does not offer installation). On iPhone/iPad, follow the manual steps below.');
+			installBtn.disabled = true;
+		}
+	});
+	// If the browser offers installation while the panel is open, enable live.
+	const onInstallAvailable = () => {
+		const btn = $('#settings-install-app', settingsContent);
+		if (btn && !isStandalone()) btn.disabled = false;
+	};
+	window.addEventListener('jmltInstallAvailable', onInstallAvailable);
 	// P3: dark mode select (auto/light/dark)
 	// P3：深色模式选择
 	on(darkModeSelect, 'change', e => {
