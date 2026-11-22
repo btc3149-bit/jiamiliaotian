@@ -31,7 +31,7 @@
     "autoprefixer": "^10.7.0",
     "cssnano": "^7.1.9",
     "eslint": "^9.39.1",
-    "globals": "^16.5.0",
+    "globals": "^17.14.0",
     "terser": "^5.51.4",
     "vite": "^6.4.6",
     "wrangler": "^4.166.0"
