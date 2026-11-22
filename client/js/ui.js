@@ -533,7 +533,7 @@ export function loginFormHandler(modal) {
 			btn.disabled = true;
 			btn.innerText = t('ui.connecting', 'Connecting...')
 		}
-		window.joinRoom(userName, roomName, password, modal, function(success) {
+		callBridge('joinRoom', userName, roomName, password, modal, function(success) {
 			if (!success && btn) {
 				btn.disabled = false;
 				btn.innerText = 'ENTER'

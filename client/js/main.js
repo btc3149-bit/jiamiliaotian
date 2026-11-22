@@ -176,7 +176,7 @@ updateStaticTexts();
 // Expose functions to the global window object for accessibility
 registerBridge('addSystemMsg', addSystemMsg);
 registerBridge('addOtherMsg', addOtherMsg);
-window.joinRoom = joinRoom;
+registerBridge('joinRoom', joinRoom);
 window.notifyMessage = notifyMessage;
 window.setupEmojiPicker = setupEmojiPicker;
 window.handleFileMessage = handleFileMessage;
