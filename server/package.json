@@ -1,13 +1,13 @@
 {
-  "name": "nodecrypt-server",
+  "name": "jiamiliaotian-server",
   "version": "1.0.0",
-  "description": "NodeCrypt Server",
+  "description": "jiamiliaotian self-hosted (Docker) relay server",
   "main": "server.js",
   "author": "Zoltan Hajdu",
-  "license": "ISC",
+  "license": "AGPL-3.0-only",
   "dependencies": {
-    "ws": "^7.3.1",
     "bufferutil": "^4.0.1",
-    "utf-8-validate": "^5.0.2"
+    "utf-8-validate": "^5.0.2",
+    "ws": "^8.23.0"
   }
 }
