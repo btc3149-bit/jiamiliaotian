@@ -225,10 +225,10 @@ document.addEventListener('click', (e) => {
 // the renderers without a cycle — expose hooks instead.
 // v1.3.0 #6/#7：设置面板在 util.settings.js，直接导入渲染器会成环——改挂钩子。
 registerBridge('renderRooms', () => renderRooms(activeRoomIndex));
-window.__jmltRenderChat = () => renderChatArea();
-window.__jmltAppendLocalHistory = (rd, entry) => {
+registerBridge('renderChat', () => renderChatArea());
+registerBridge('appendLocalHistory', (rd, entry) => {
 	try { appendLocalHistory(rd, entry) } catch (_e) { /* best-effort */ }
-};
+});
 
 // v1.4.0 #14: prefill the login form with migrated credentials. Works both
 // on the login page (fill the main form) and inside a room (open the join

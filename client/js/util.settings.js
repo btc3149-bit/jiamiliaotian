@@ -44,7 +44,7 @@ function currentRoom() {
 }
 function refreshRoomViews() {
 	callBridge('renderRooms');
-	if (typeof window.__jmltRenderChat === 'function') window.__jmltRenderChat()
+	callBridge('renderChat')
 }
 // Default settings
 // 默认设置
@@ -745,7 +745,7 @@ function setupSettingsPanel() {
 				rd.messages.push(entry);
 				// opt-in encrypted local history (no-op unless enabled)
 				try {
-					window.__jmltAppendLocalHistory && window.__jmltAppendLocalHistory(rd, entry)
+					callBridge('appendLocalHistory', rd, entry)
 				} catch (_e) { /* best-effort */ }
 			}
 			// chronological order across merged devices
