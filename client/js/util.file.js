@@ -21,6 +21,17 @@ import { sha256 } from 'js-sha256';
 const RESUME_RETENTION_MS = 5 * 60 * 1000;
 const RESUME_PAYLOAD_CAP = 16 * 1024 * 1024;
 
+// #26: receiver-side retention for COMPLETED transfers. Received volumes
+// used to live in window.fileTransfers forever (~341MB of base64 strings
+// for one 256MB file, never released until the tab died). Completed
+// transfers now expire after 30 minutes (or immediately via the manual
+// release entry); the UI then shows an explicit "released" state.
+// #26：接收端已完成传输的保留策略。接收分卷过去永久驻留
+// window.fileTransfers（一个 256MB 文件约 341MB base64 字符串，直到
+// 标签页被杀才释放）。已完成传输 30 分钟后过期（或经手动入口立即
+// 释放），UI 明确呈现「已释放」状态。
+export const RECEIVED_RETENTION_MS = 30 * 60 * 1000;
+
 // v1.7.0 #19: honest transfer size cap. Everything is memory-only (zero
 // server storage, RULES.md invariant 4), so the transfer pipeline must stay
 // inside sane RAM bounds: volumes live in memory on BOTH ends until
@@ -643,9 +654,48 @@ async function sendVolumes(fileId, volumes, onSend, updateProgress, fileName) {
 	sendNextBatch();
 }
 
-// Update file progress in chat
-// 更新聊天中的文件进度
-function updateFileProgress(fileId) {
+// #12: progress rendering is throttled to at most one DOM pass per 100ms
+// per transfer. The old code ran a full-document querySelectorAll on EVERY
+// received volume (1024 volumes for a 256MB file = 1024 full scans).
+// Terminal states (completed / incomplete / released) always render
+// immediately. Element references are deliberately NOT cached: chat
+// re-renders rebuild the bubbles, so cached nodes would go stale — the
+// throttle removes the scan frequency instead of the scan itself.
+// #12：进度渲染按传输节流为每 100ms 最多一次 DOM 扫描。旧代码每收一卷
+// 做一次全文档 querySelectorAll（256MB 文件 1024 卷 = 1024 次全扫描）。
+// 终态（completed/incomplete/released）始终立即渲染。不缓存元素引用：
+// 聊天重渲染会重建气泡，缓存节点会失效——节流降的是扫描频率。
+const PROGRESS_THROTTLE_MS = 100;
+const progressThrottle = new Map(); // fileId -> { last: number, timer: any }
+export function updateFileProgress(fileId) {
+	const transfer = window.fileTransfers.get(fileId);
+	if (!transfer) return;
+	const terminal = transfer.status === 'completed' || transfer.status === 'incomplete' || transfer.status === 'released';
+	const now = Date.now();
+	const slot = progressThrottle.get(fileId);
+	if (terminal) {
+		if (slot && slot.timer) clearTimeout(slot.timer);
+		progressThrottle.delete(fileId);
+		renderFileProgress(fileId);
+		return;
+	}
+	if (slot && (now - slot.last) < PROGRESS_THROTTLE_MS) {
+		if (!slot.timer) {
+			slot.timer = setTimeout(() => {
+				slot.timer = null;
+				slot.last = Date.now();
+				renderFileProgress(fileId);
+			}, PROGRESS_THROTTLE_MS - (now - slot.last));
+		}
+		return;
+	}
+	progressThrottle.set(fileId, { last: now, timer: null });
+	renderFileProgress(fileId);
+}
+
+// Update file progress in chat (immediate render; see throttle wrapper above)
+// 更新聊天中的文件进度（立即渲染；节流包装见上）
+function renderFileProgress(fileId) {
 	const transfer = window.fileTransfers.get(fileId);
 	if (!transfer) return;
 	const elements = document.querySelectorAll(`[data-file-id="${fileId}"]`);
@@ -680,6 +730,18 @@ function updateFileProgress(fileId) {
 			if (statusText) statusText.textContent = transfer.status === 'incomplete'
 				? t('file.waiting_resume', 'Waiting for re-send…')
 				: `Receiving ${transfer.receivedVolumes.size}/${transfer.totalVolumes}`;
+			if (downloadBtn) {
+				downloadBtn.classList.remove('show', 'animate-in');
+				downloadBtn.style.display = 'none';
+			}
+		} else if (transfer.status === 'released') {
+			// #26: explicit released state — never a silent dead button.
+			if (progressContainer) {
+				progressContainer.style.display = 'block';
+				progressContainer.classList.remove('fade-out');
+			}
+			if (progressBar) progressBar.style.width = '0%';
+			if (statusText) statusText.textContent = t('file.released', 'Released to free memory — ask the sender to re-send to view or save it again.');
 			if (downloadBtn) {
 				downloadBtn.classList.remove('show', 'animate-in');
 				downloadBtn.style.display = 'none';
@@ -879,12 +941,12 @@ function handleFileStart(message, isPrivate, roomIdx) {
 function handleFileVolume(message) {
 	const { fileId, volumeIndex, volumeData } = message;
 	const transfer = window.fileTransfers.get(fileId);
-	
-	if (!transfer) return;
-	
+
+	if (!transfer || !transfer.volumeData) return; // #26: volumes already released
+
 	transfer.receivedVolumes.add(volumeIndex);
 	transfer.volumeData[volumeIndex] = volumeData;
-	
+
 	updateFileProgress(fileId);
 }
 
@@ -898,6 +960,10 @@ function handleFileComplete(message) {
 	// 检查是否所有分卷都已接收
 	if (transfer.receivedVolumes.size === transfer.totalVolumes) {
 		transfer.status = 'completed';
+		transfer.completedAt = Date.now();
+		// #26: arm the 30-minute retention expiry for received data.
+		if (transfer._releaseTimer) clearTimeout(transfer._releaseTimer);
+		transfer._releaseTimer = setTimeout(() => releaseTransferData(fileId), RECEIVED_RETENTION_MS);
 		updateFileProgress(fileId);
 		return
 	}
@@ -932,10 +998,20 @@ function handleFileComplete(message) {
 // 从分卷下载文件
 export async function downloadFile(fileId) {
 	const transfer = window.fileTransfers.get(fileId);
-	if (!transfer || transfer.status !== 'completed') return;
+	if (!transfer) return;
+	// #26: released transfers explain themselves instead of failing silently.
+	if (transfer.status === 'released') {
+		window.addSystemMsg && window.addSystemMsg(t('file.released', 'Released to free memory — ask the sender to re-send to view or save it again.'), true);
+		return;
+	}
+	if (transfer.status !== 'completed') return;
 
 	try {
-		if (transfer.isArchive) {
+		if (!transfer.isArchive && transfer.blobCache) {
+			// #26: volumes were released after the first decode — save the
+			// cached Blob through the same capability chain.
+			await saveBlobAuto(transfer.blobCache, transfer.fileName);
+		} else if (transfer.isArchive) {
 			// Download archive as multiple files
 			await decompressArchiveToFiles(transfer.volumeData, transfer.fileManifest, transfer.archiveHash);
 			// 删除系统提示
@@ -986,11 +1062,34 @@ function guessMime(name) {
 	return 'application/octet-stream';
 }
 
+// #26: release a completed transfer's data (volume originals + cached
+// Blob). The transfer entry stays so the UI can show the explicit
+// "released" state; the sender is NOT notified (re-getting the file means
+// asking for a re-send — there is no server copy, RULES invariant 4).
+// #26：释放已完成传输的数据（分卷原件 + 缓存 Blob）。传输条目保留，
+// 以便 UI 呈现明确的「已释放」状态；不通知发送方（重新获取 = 请对方
+// 重发——服务器没有任何副本，不变量 4）。
+export function releaseTransferData(fileId) {
+	const transfer = window.fileTransfers.get(fileId);
+	if (!transfer || transfer.status !== 'completed') return false;
+	if (transfer._releaseTimer) { clearTimeout(transfer._releaseTimer); transfer._releaseTimer = null; }
+	transfer.volumeData = null;
+	transfer.blobCache = null;
+	transfer.status = 'released';
+	updateFileProgress(fileId);
+	return true;
+}
+
 // Decompress a completed single-file transfer into a Blob (hash-verified).
-// 将已完成的单文件传输解压为 Blob（带哈希校验）。
+// #26: the first successful decode is cached by fileId and the volume
+// originals are released right away — repeat previews/downloads used to
+// re-run the full decode→join→inflate→SHA-256 pipeline every time.
+// 将已完成的单文件传输解压为 Blob（带哈希校验）。#26：首次解出后按
+// fileId 缓存，并立即释放分卷原件——过去每次预览/下载都全量重解。
 export async function getTransferBlob(fileId) {
 	const transfer = window.fileTransfers.get(fileId);
 	if (!transfer || transfer.status !== 'completed') return null;
+	if (transfer.blobCache) return transfer.blobCache;
 	if (transfer.isArchive || !transfer.volumeData || !transfer.volumeData.length) return null;
 
 	const combined = transfer.volumeData.map((v) => base64ToArrayBuffer(v));
@@ -1010,7 +1109,12 @@ export async function getTransferBlob(fileId) {
 			throw new Error('File integrity check failed: hash mismatch');
 		}
 	}
-	return new Blob([decompressed], { type: guessMime(transfer.fileName) });
+	const blob = new Blob([decompressed], { type: guessMime(transfer.fileName) });
+	// #26: cache the Blob, release the base64 volume originals (the ~341MB
+	// string form of a 256MB file drops to a single Blob reference).
+	transfer.blobCache = blob;
+	transfer.volumeData = null;
+	return blob;
 }
 
 // Save a Blob through the capability chain. Resolves to the method used, or
@@ -1054,6 +1158,11 @@ export async function saveBlobAuto(blob, fileName) {
 export async function previewFile(fileId) {
 	const transfer = window.fileTransfers.get(fileId);
 	if (!transfer) return;
+	// #26: released transfers get the explicit released message.
+	if (transfer.status === 'released') {
+		window.addSystemMsg && window.addSystemMsg(t('file.released', 'Released to free memory — ask the sender to re-send to view or save it again.'), true);
+		return;
+	}
 	let overlay = null;
 	try {
 		const blob = await getTransferBlob(fileId);

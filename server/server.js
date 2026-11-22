@@ -606,7 +606,7 @@ const handleChannelMessage = (clientId, decrypted) => {
 				};
 
 				const encrypted = encryptMessage(messageObj, targetClient.shared);
-				sendMessage(targetClient.connection, encrypted);
+				sendMessage(targetClient.connection, encrypted, { critical: false }); // #28: fanout is droppable under backpressure
 
 				messageObj.p = null;
 			}
@@ -635,7 +635,7 @@ const broadcastMemberList = (channel) => {
 				};
 
 				const encrypted = encryptMessage(listObj, client.shared);
-				sendMessage(client.connection, encrypted);
+				sendMessage(client.connection, encrypted, { critical: false }); // #28: re-broadcast on next change
 
 				listObj.p = null;
 			}
@@ -701,12 +701,64 @@ const isClientInChannel = (client, channel) => {
 };
 
 
-const sendMessage = (connection, message) => {
+// ---- #28: fanout backpressure (Node path only) ----
+// sendMessage used to check only readyState: a slow/dead member's outbound
+// queue (ws bufferedAmount) grew without bound, fed by ~470KB file frames.
+// Threshold derivation (deliberately conservative, do not lower casually):
+// - SOFT = 8MB = exactly one maximum-size frame. A healthy client that is
+//   actively draining can transiently hold one full frame in flight, so
+//   nothing is ever dropped at or below one frame's worth of backlog.
+// - Above SOFT, only NON-critical frames are dropped (channel fanout and
+//   member-list broadcasts — both self-healing: fanout content is covered
+//   by peer replay after reconnect, member lists re-broadcast on change).
+//   Unicast (private messages, sync replay) and handshake frames are
+//   critical and are never dropped by this mechanism.
+// - SUSTAIN = 20s above SOFT before closing: even a very slow 512KB/s
+//   reader drains >10MB in 20s, so a queue still above 8MB after 20s is a
+//   dead reader, not a slow-but-normal user. Close code 1013 (try again
+//   later); the client reconnects with backoff (#13) + peer replay (#30).
+// Worker path: Cloudflare WebSockets expose no bufferedAmount, so the
+// Worker implements only the fanout yield (see worker/index.js #28) —
+// this asymmetry is declared in the README dual-path differences table
+// (RULES invariant 9).
+// ---- #28：扇出背压（仅 Node 路径）----
+// 推导见上：SOFT=8MB 恰为一帧上限，正常排空的客户端在途至多一帧，
+// 故一帧以内绝不丢；超 SOFT 只丢非关键帧（频道扇出/成员列表，均可
+// 自愈）；持续超 20s 判定为死读者（512KB/s 的慢读者 20s 也能排空
+// >10MB），以 1013 断开，客户端退避重连 + 同伴重播兜底。
+const BP_SOFT_BYTES = 8 * 1024 * 1024;
+const BP_SUSTAIN_MS = 20000;
+
+// Pure decision function (exported for tests). Returns the action plus the
+// updated overSince timestamp the caller must persist per connection.
+const backpressureAction = (bufferedAmount, overSince, now, isCritical) => {
+	const amt = (typeof bufferedAmount === 'number' && bufferedAmount > 0) ? bufferedAmount : 0;
+	if (amt <= BP_SOFT_BYTES) return { action: 'send', overSince: 0 };
+	const since = overSince || now;
+	if (now - since >= BP_SUSTAIN_MS) return { action: 'close', overSince: since };
+	if (!isCritical) return { action: 'drop', overSince: since };
+	return { action: 'send', overSince: since };
+};
+
+const sendMessage = (connection, message, options) => {
 	try {
 		if (
 			connection.readyState &&
 			connection.readyState === ws.OPEN
 		) {
+			// #28: consult the backpressure gate before queueing more data.
+			const isCritical = !options || options.critical !== false;
+			const bp = backpressureAction(connection.bufferedAmount, connection._bpOverSince || 0, Date.now(), isCritical);
+			connection._bpOverSince = bp.overSince;
+			if (bp.action === 'drop') {
+				connection._bpDropped = (connection._bpDropped || 0) + 1;
+				return;
+			}
+			if (bp.action === 'close') {
+				logEvent('sendMessage-backpressure', 'closing sustained-over-threshold connection', 'error');
+				try { connection.close(1013); } catch (_e) { /* already gone */ }
+				return;
+			}
 			connection.send(message);
 		}
 	} catch (error) {
@@ -802,3 +854,10 @@ setInterval(() => {
 		global.gc();
 	}
 }, 30000);
+// #28: test hooks — the pure backpressure decision, exported without
+// changing runtime behaviour (the server above starts as usual).
+if (typeof module !== 'undefined' && module.exports) {
+	module.exports.backpressureAction = backpressureAction;
+	module.exports.BP_SOFT_BYTES = BP_SOFT_BYTES;
+	module.exports.BP_SUSTAIN_MS = BP_SUSTAIN_MS;
+}

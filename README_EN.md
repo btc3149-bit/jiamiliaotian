@@ -38,6 +38,7 @@ Access http://localhost:80
 | Server key rotation / migration signature | ✅ 24h rotation + 48h old-key migration signature | ❌ Node has no 24h rotation or migration signature: the RSA key is generated at process start and changes on every restart; pinned clients will hit a key mismatch, disconnect, and must confirm a pin reset to reconnect. Restarting the Node server means every member must re-confirm the server key |
 | Channel name validation | ✅ Enforces room-name SHA-256 hash format | ✅ Aligned (both enforce the room-name SHA-256 hash format) |
 | Stale connection cleanup | ✅ Detaches from channel and broadcasts on cleanup | ✅ Aligned (detaches from channel and broadcasts; member lists contain no offline members) |
+| Fanout backpressure | ⚠️ Workers expose no standard bufferedAmount: large-frame fanout only yields to the event loop every 8 recipients; no frames dropped, no disconnects | ✅ Checks bufferedAmount: connections above the 8MB threshold for a sustained 20s drop non-critical frames (channel fanout / member lists); if the queue still does not drain, the connection is closed with 1013 (client reconnects with backoff + peer replay) |
 
 > **TLS note for Docker deployments**: The Docker image serves plain HTTP only (port 80). In production, always put a TLS-terminating reverse proxy in front of it (e.g. Caddy / Nginx / Cloudflare Tunnel) and let that layer redirect HTTP to HTTPS and send `Strict-Transport-Security: max-age=31536000; includeSubDomains`. Do not expose port 80 directly to the public internet in plaintext.
 

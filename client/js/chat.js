@@ -51,6 +51,23 @@ function renderVoiceHtml(v) {
 }
 
 
+// #15: bulk-render guard. renderChatArea() replays the whole room history
+// through addMsg/addOtherMsg/addSystemMsg, and each of those used to write
+// scrollTop = scrollHeight per message — reading scrollHeight forces a
+// synchronous layout, so N messages = N forced reflows on every room
+// switch. During a bulk render the per-message scroll writes are skipped
+// and renderChatArea sets scrollTop exactly once at the end. Single new
+// messages (outside bulk render) keep the exact old behaviour.
+// #15：批量渲染守卫。renderChatArea() 经 addMsg/addOtherMsg/addSystemMsg
+// 全量重放房间历史，每条过去都写一次 scrollTop = scrollHeight——读
+// scrollHeight 触发同步布局，N 条 = N 次强制回流。批量期间逐条滚动
+// 写入被跳过，renderChatArea 在末尾只设一次。单条新消息行为不变。
+let bulkRenderDepth = 0;
+export function scrollChatToBottom(chatArea) {
+	if (bulkRenderDepth > 0 || !chatArea) return;
+	chatArea.scrollTop = chatArea.scrollHeight;
+}
+
 // Render the chat area
 // 渲染聊天区域
 export function renderChatArea() {
@@ -65,12 +82,19 @@ export function renderChatArea() {
 		return
 	}
 	chatArea.innerHTML = '';
-	roomsData[activeRoomIndex].messages.forEach(m => {
-		const meta = { id: m.id, reactions: m.reactions, mentions: m.mentions, mentionsMe: m.mentionsMe, quote: m.quote, ttl: m.ttl, edited: m.edited, deleted: m.deleted, burned: m.burned, read: m.read };
-		if (m.type === 'me') addMsg(m.text, true, m.msgType || 'text', m.timestamp, meta);
-		else if (m.type === 'system') addSystemMsg(m.text, true, m.timestamp);
-		else addOtherMsg(m.text, m.userName, m.avatar, true, m.msgType || 'text', m.timestamp, meta)
-	})
+	bulkRenderDepth++;
+	try {
+		roomsData[activeRoomIndex].messages.forEach(m => {
+			const meta = { id: m.id, reactions: m.reactions, mentions: m.mentions, mentionsMe: m.mentionsMe, quote: m.quote, ttl: m.ttl, edited: m.edited, deleted: m.deleted, burned: m.burned, read: m.read };
+			if (m.type === 'me') addMsg(m.text, true, m.msgType || 'text', m.timestamp, meta);
+			else if (m.type === 'system') addSystemMsg(m.text, true, m.timestamp);
+			else addOtherMsg(m.text, m.userName, m.avatar, true, m.msgType || 'text', m.timestamp, meta)
+		})
+	} finally {
+		bulkRenderDepth--;
+	}
+	// #15: the single scroll write for the whole replay.
+	chatArea.scrollTop = chatArea.scrollHeight;
 }
 
 // Add a message to the chat area
@@ -119,7 +143,7 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 			'data-mid': safeMidEarly
 		}, `<span class="bubble-content"><span class="msg-recalled">${escapeHTML(t(meta.burned ? 'ui.burned' : 'ui.recalled', meta.burned ? 'Message expired' : 'Message recalled'))}</span></span><span class="bubble-meta">${time}</span>`);
 		chatArea.appendChild(tomb);
-		chatArea.scrollTop = chatArea.scrollHeight;
+		scrollChatToBottom(chatArea);
 		return
 	}
 	// P1-B: reply-quote block (both fields remote-controlled → escaped)
@@ -204,7 +228,7 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 	if (safeMid) renderReactions(safeMid);
 	const rdBurn = roomsData[activeRoomIndex];
 	if (safeMid && meta && meta.ttl && rdBurn) armBurnTimer(rdBurn, safeMid, meta.ttl, ts);
-	chatArea.scrollTop = chatArea.scrollHeight
+	scrollChatToBottom(chatArea)
 }
 // Add a message from another user to the chat area
 // 添加来自其他用户的消息到聊天区域
@@ -295,7 +319,7 @@ export function addOtherMsg(msg, userName = '', _avatar = '', isHistory = false,
 			tombAvatar.innerHTML = cleanSvg
 		}
 		chatArea.appendChild(tombWrap);
-		chatArea.scrollTop = chatArea.scrollHeight;
+		scrollChatToBottom(chatArea);
 		return
 	}
 	// P1-B: reply-quote block (both fields remote-controlled → escaped)
@@ -325,7 +349,7 @@ export function addOtherMsg(msg, userName = '', _avatar = '', isHistory = false,
 	}
 	chatArea.appendChild(bubbleWrap);
 	if (safeMid) renderReactions(safeMid);
-	chatArea.scrollTop = chatArea.scrollHeight
+	scrollChatToBottom(chatArea)
 }
 
 // Add a system message to the chat area
@@ -346,7 +370,7 @@ export function addSystemMsg(text, isHistory = false, timestamp = null) {
 		class: 'bubble system'
 	}, `<span class="bubble-content">${safeText}</span>`);
 	chatArea.appendChild(div);
-	chatArea.scrollTop = chatArea.scrollHeight
+	scrollChatToBottom(chatArea)
 }
 
 // Update the style of the chat input area
@@ -516,6 +540,12 @@ function renderFileMessage(fileData, isSender) {
 		} else if (transfer.status === 'completed') {
 			// 完成时不显示任何状态，只显示下载按钮
 			downloadBtnStyle = isSender ? 'display: none;' : 'display: flex;';
+		} else if (transfer.status === 'released') {
+			// #26: data was released to free memory — say so explicitly
+			// instead of letting preview/download fail silently.
+			statusText = t('file.released', 'Released to free memory — ask the sender to re-send to view or save it again.');
+			showProgress = true;
+			downloadBtnStyle = 'display: none;';
 		}	} else if (isSender) {
 		// 发送方历史消息，不显示状态和下载按钮
 		downloadBtnStyle = 'display: none;';
@@ -540,6 +570,7 @@ function renderFileMessage(fileData, isSender) {
 					<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><g stroke-width="0"></g><g stroke-linecap="round" stroke-linejoin="round"></g><g> <path fill-rule="evenodd" clip-rule="evenodd" d="M8 10C8 7.79086 9.79086 6 12 6C14.2091 6 16 7.79086 16 10V11H17C18.933 11 20.5 12.567 20.5 14.5C20.5 16.433 18.933 18 17 18H16.9C16.3477 18 15.9 18.4477 15.9 19C15.9 19.5523 16.3477 20 16.9 20H17C20.0376 20 22.5 17.5376 22.5 14.5C22.5 11.7793 20.5245 9.51997 17.9296 9.07824C17.4862 6.20213 15.0003 4 12 4C8.99974 4 6.51381 6.20213 6.07036 9.07824C3.47551 9.51997 1.5 11.7793 1.5 14.5C1.5 17.5376 3.96243 20 7 20H7.1C7.65228 20 8.1 19.5523 8.1 19C8.1 18.4477 7.65228 18 7.1 18H7C5.067 18 3.5 16.433 3.5 14.5C3.5 12.567 5.067 11 7 11H8V10ZM13 11C13 10.4477 12.5523 10 12 10C11.4477 10 11 10.4477 11 11V16.5858L9.70711 15.2929C9.31658 14.9024 8.68342 14.9024 8.29289 15.2929C7.90237 15.6834 7.90237 16.3166 8.29289 16.7071L11.2929 19.7071C11.6834 20.0976 12.3166 20.0976 12.7071 19.7071L15.7071 16.7071C16.0976 16.3166 16.0976 15.6834 15.7071 15.2929C15.3166 14.9024 14.6834 14.9024 14.2929 15.2929L13 16.5858V11Z" fill="currentColor"></path> </g></svg>
 				</button>
 			</div>
+			${(!isSender && transfer && transfer.status === 'completed') ? `<button class="file-release-btn" type="button">${escapeHTML(t('file.release', 'Release'))}</button>` : ''}
 			${showProgress ? `<div class="file-progress-container">
 				<div class="file-progress-bar">
 					<div class="file-progress" style="width: ${progressWidth}"></div>
