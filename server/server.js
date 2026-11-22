@@ -3,6 +3,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const http = require('http');
 const ws = require('ws');
 
 // Generate a new RSA key pair
@@ -118,9 +119,26 @@ const rlIpHandshakeCount = (ip, now) => {
 };
 
 
+// Item 32: plain-HTTP front door for the ws server, solely so Docker /
+// orchestrators can probe liveness. /healthz returns the bare string
+// "ok" with status 200 — no version, no counts, no keys, no channel or
+// client metadata of any kind (RULES 1/9). Every other path is a bare
+// 404. WebSocket upgrades bypass this handler via the ws server below.
+// 仅供 Docker/编排探活的 HTTP 入口：/healthz 只回 200 + "ok"，
+// 不带任何业务元数据；其余路径一律空 404。
+const httpServer = http.createServer((req, res) => {
+	const urlPath = (req.url || '').split('?')[0];
+	if (req.method === 'GET' && urlPath === '/healthz') {
+		res.writeHead(200, { 'Content-Type': 'text/plain' });
+		res.end('ok');
+		return;
+	}
+	res.writeHead(404, { 'Content-Type': 'text/plain' });
+	res.end();
+});
+
 const wss = new ws.Server({
-	host: config.wsHost,
-	port: config.wsPort,
+	server: httpServer,
 	perMessageDeflate: false,
 	// S-1: the only limit enforced before a full frame lands in memory.
 	maxPayload: RL.maxFrameBytes,
@@ -136,7 +154,9 @@ const wss = new ws.Server({
 	}
 });
 
-console.log('server started', config.wsHost, config.wsPort);
+httpServer.listen(config.wsPort, config.wsHost, () => {
+	console.log('server started', config.wsHost, config.wsPort);
+});
 
 
 var clients = {};
