@@ -22,6 +22,7 @@ import {
 import {
 	t
 } from './util.i18n.js';
+import { callBridge, hasBridge } from './util.bridge.js';
 import {
 	updateChatInputStyle
 } from './chat.js';
@@ -34,7 +35,10 @@ import {
 	handleModalTab
 } from './util.a11yUx.js';
 // P3: QR invite codes (qrcode-generator, MIT, zero deps — RULES.md invariant 6 vetted)
-import qrcode from 'qrcode-generator';
+// Item 14: loaded lazily via dynamic import — QR codes are only generated
+// when a share/migration modal opens, so the library stays out of the
+// first-screen bundle (its own chunk, cached by the SW static-shell rule).
+// 条目 14：qrcode-generator 改动态 import 懒加载，打开分享/迁移弹窗时才加载。
 
 // Utility functions for security and error handling
 // 安全和错误处理工具函数
@@ -70,10 +74,10 @@ function simpleDecrypt(encrypted) {
 // 验证房间数据
 function validateRoomData(roomData) {
 	if (!roomData) {
-		return { valid: false, error: 'No room data available' };
+		return { valid: false, error: t('action.no_room_data', 'No room data available') };
 	}
 	if (!roomData.roomName || roomData.roomName.trim() === '') {
-		return { valid: false, error: 'Room name is required' };
+		return { valid: false, error: t('action.room_name_required', 'Room name is required') };
 	}
 	return { valid: true };
 }
@@ -82,13 +86,13 @@ function validateRoomData(roomData) {
 // 复制文本到剪贴板（含降级处理）
 function copyToClipboard(text, successMessage = t('action.copied', 'Copied to clipboard!'), errorPrefix = t('action.copy_failed', 'Copy failed, url:')) {
 	if (!text) {
-		window.addSystemMsg && window.addSystemMsg(t('action.nothing_to_copy', 'Nothing to copy'));
+		callBridge('addSystemMsg', t('action.nothing_to_copy', 'Nothing to copy'));
 		return;
 	}
 
 	if (navigator.clipboard && navigator.clipboard.writeText) {
 		navigator.clipboard.writeText(text).then(() => {
-			window.addSystemMsg && window.addSystemMsg(successMessage);
+			callBridge('addSystemMsg', successMessage);
 		}).catch((error) => {
 			console.error('Clipboard write failed:', error);
 			showFallbackCopy(text, errorPrefix);
@@ -105,7 +109,7 @@ function showFallbackCopy(text, prefix) {
 		prompt(prefix, text);
 	} else {
 		// For environments where prompt is not available
-		window.addSystemMsg && window.addSystemMsg(t('action.copy_not_supported', 'Copy not supported in this environment'));
+		callBridge('addSystemMsg', t('action.copy_not_supported', 'Copy not supported in this environment'));
 	}
 }
 
@@ -129,7 +133,7 @@ function executeMenuAction(action, closeMenuCallback) {
 		}
 	} catch (error) {
 		console.error('Menu action failed:', error);
-		window.addSystemMsg && window.addSystemMsg(t('action.action_failed', 'Action failed. Please try again.'));
+		callBridge('addSystemMsg', t('action.action_failed', 'Action failed. Please try again.'));
 	} finally {
 		closeMenuCallback && closeMenuCallback();
 	}
@@ -146,7 +150,7 @@ export function openShareInvite() {
 function handleShareAction() {
 	const validation = validateRoomData(roomsData[activeRoomIndex]);
 	if (!validation.valid) {
-		window.addSystemMsg && window.addSystemMsg(`${t('action.cannot_share', 'Cannot share:')} ${validation.error}`);
+		callBridge('addSystemMsg', `${t('action.cannot_share', 'Cannot share:')} ${validation.error}`);
 		return;
 	}
 
@@ -171,7 +175,7 @@ function handleShareAction() {
 // The QR encodes the same invite link (obfuscated r/p params, see README
 // security notes) — scanning it on another device joins the room directly.
 // P3：分享弹窗 + 二维码邀请。二维码编码与链接相同的邀请参数，扫码即可入房。
-function showShareModal(url) {
+async function showShareModal(url) {
 	// remove any previous share modal
 	const prev = document.querySelector('.share-modal-overlay');
 	if (prev) prev.remove();
@@ -181,6 +185,7 @@ function showShareModal(url) {
 
 	let qrSvg = '';
 	try {
+		const { default: qrcode } = await import('qrcode-generator');
 		// typeNumber 0 = auto-size, 'M' error correction — good for long URLs
 		const qr = qrcode(0, 'M');
 		qr.addData(url);
@@ -482,11 +487,11 @@ export function setupMoreBtnMenu() {
 		}
 	});
 
-	menu.addEventListener('animationend', function(e) {
+	menu.addEventListener('animationend', function() {
 		animating = false;
 	});
 
-	menu.addEventListener('transitionend', function(e) {
+	menu.addEventListener('transitionend', function() {
 		animating = false;
 	});
 }
@@ -500,7 +505,7 @@ export function preventSpaceInput(input) {
 			e.preventDefault()
 		}
 	});
-	input.addEventListener('input', function(e) {
+	input.addEventListener('input', function() {
 		input.value = input.value.replace(/[\s\p{P}\p{S}]/gu, function(match) {
 			return match === "'" ? "'" : ''
 		})
@@ -568,7 +573,7 @@ export function loginFormHandler(modal) {
 			btn.disabled = true;
 			btn.innerText = t('ui.connecting', 'Connecting...')
 		}
-		window.joinRoom(userName, roomName, password, modal, function(success) {
+		callBridge('joinRoom', userName, roomName, password, modal, function(success) {
 			if (!success && btn) {
 				btn.disabled = false;
 				btn.innerText = 'ENTER'
@@ -693,8 +698,8 @@ export function autofillRoomPwd(formPrefix = '') {
 		isPlaintext = true;
 		
 		// Show security warning for plaintext URLs
-		if (window.addSystemMsg) {
-			window.addSystemMsg(t('system.security_warning', '⚠️ This link uses an old format. Room data is not encrypted.'), true);
+		if (hasBridge('addSystemMsg')) {
+			callBridge('addSystemMsg', t('system.security_warning', '⚠️ This link uses an old format. Room data is not encrypted.'), true);
 		}
 	}
 		// Fill in the form fields
@@ -714,7 +719,7 @@ export function autofillRoomPwd(formPrefix = '') {
 			
 			// Add visual indicator for no password and keep label floating
 			if (!pwdValue) {
-				pwdInput.placeholder = 'No password required';
+				pwdInput.placeholder = t('ui.no_password_required', 'No password required');
 				// Add a space to make the input appear "filled" so the label stays floating
 				pwdInput.value = ' ';
 				// Make the text invisible but keep the label floating behavior

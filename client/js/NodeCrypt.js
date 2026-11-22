@@ -24,7 +24,57 @@ import {
 	isRatchetEligible,
 	RATCHET_WIRE_PREFIX
 } from './util.ratchet.js';
+import {
+	t
+} from './util.i18n.js';
+import { isValidReactionEmoji } from './util.validate.js';
 window.Buffer = Buffer;
+
+// ===================== perf batch (upgrade/client-perf) =====================
+// #13: reconnect backoff. Pure + exported for tests: base doubles from 1s,
+// capped at 30s; jitter is ±50% (delay ∈ [0.5×base, 1.5×base)).
+// #13：重连退避。纯函数导出供测试：基数从 1s 起翻倍、30s 封顶；
+// 抖动 ±50%（实际延迟 ∈ [0.5×基数, 1.5×基数)）。
+export function computeReconnectDelay(attempt, rand = Math.random()) {
+	const a = (typeof attempt === 'number' && attempt > 0) ? Math.floor(attempt) : 0;
+	const base = Math.min(30000, 1000 * Math.pow(2, Math.min(a, 5)));
+	const r = (typeof rand === 'number' && rand >= 0 && rand < 1) ? rand : 0;
+	return Math.round(base * (0.5 + r));
+}
+
+// #16: channel frame budget. The server relay caps one frame at 8MB; a
+// channel message carries one independently-encrypted copy per member.
+// A 256KB file volume inflates to ≈470KB on the wire per copy (base64 of
+// the volume + content-layer encryption + transport-layer encryption).
+// #16：频道帧预算。服务器中继单帧上限 8MB；频道消息按成员逐人加密，
+// 一帧含 N 份独立副本。256KB 分卷的单份线格式副本约 470KB（分卷
+// base64 + 内容层加密 + 传输层加密的叠加膨胀）。
+export const FRAME_LIMIT_BYTES = 8 * 1024 * 1024;
+export const PER_COPY_WIRE_BYTES = 470 * 1024;
+export const VOLUME_RAW_BYTES = 256 * 1024;
+
+// Estimated total frame size for one channel send: per-copy wire size is
+// the content JSON length inflated by the observed ≈470/342 ratio (use
+// 1.4, rounded up) plus fixed envelope overhead, times the member count.
+// 预估一次频道发送的总帧尺寸：单份副本 ≈ 内容 JSON 长度 ×1.4（与
+// 470/342 实测膨胀比一致，向上取整）+ 固定信封开销，再乘成员数。
+export function estimateChannelFrameBytes(memberCount, contentJsonLength) {
+	const n = Math.max(0, Math.floor(memberCount) || 0);
+	const len = Math.max(0, Math.floor(contentJsonLength) || 0);
+	if (n === 0 || len === 0) return 0;
+	return n * (Math.ceil(len * 1.4) + 128);
+}
+
+// Approximate max single-file size sendable in a room of `memberCount`
+// members: each frame may carry floor(8MB / members) per copy, and a raw
+// volume byte becomes PER_COPY_WIRE/VOLUME_RAW wire bytes.
+// 当前房间人数下单文件上限的近似值：每份副本的帧预算为
+// floor(8MB / 人数)，原始分卷字节按 470/256 的膨胀比折算回原始体积。
+export function estimateRoomFileLimitBytes(memberCount) {
+	const n = Math.max(1, Math.floor(memberCount) || 1);
+	const perCopyBudget = Math.floor(FRAME_LIMIT_BYTES / n);
+	return Math.floor(perCopyBudget * VOLUME_RAW_BYTES / PER_COPY_WIRE_BYTES);
+}
 
 // Main NodeCrypt class for secure communication
 // 用于安全通信的 NodeCrypt 主类
@@ -55,9 +105,17 @@ class NodeCrypt {
 			onClientReadReceipt: callbacks.onClientReadReceipt || null,
 			onClientSync: callbacks.onClientSync || null,
 			onClientReplay: callbacks.onClientReplay || null,
+			onClientSyncDone: callbacks.onClientSyncDone || null,
+			onChannelFrameTooLarge: callbacks.onChannelFrameTooLarge || null,
 			onClientStatus: callbacks.onClientStatus || null,
-			onClientCall: callbacks.onClientCall || null
+			onClientCall: callbacks.onClientCall || null,
+			onServerKeyMismatch: callbacks.onServerKeyMismatch || null,
+			onPinPersistFailed: callbacks.onPinPersistFailed || null
 		};
+		// One-shot flag: the pin-persistence warning fires at most once per
+		// instance, however many pin reads/writes fail.
+		// 一次性标志：pin 持久化警告每个实例最多触发一次。
+		this._pinPersistWarned = false;
 		try {
 			this.clientEc = new elliptic('curve25519')
 		} catch (error) {
@@ -68,6 +126,7 @@ class NodeCrypt {
 		this.credentials = null;
 		this.connection = null;
 		this.reconnect = null;
+		this.reconnectAttempts = 0; // #13: consecutive failed reconnects (reset on open)
 		this.ping = null;
 		this.channel = {};
 		// v1.6.0 #15: ratchet state lives INSIDE each channel entry (ch.ratchet)
@@ -177,6 +236,7 @@ class NodeCrypt {
 		};
 		this.callbacks.onServerClosed = null;
 		this.callbacks.onServerSecured = null;
+		this.callbacks.onPinPersistFailed = null;
 		this.callbacks.onClientSecured = null;
 		this.callbacks.onClientList = null;
 		this.callbacks.onClientMessage = null;
@@ -211,6 +271,7 @@ class NodeCrypt {
 	// WebSocket 连接打开事件处理
 	async onOpen() {
 		this.logEvent('onOpen');
+		this.reconnectAttempts = 0; // #13: connection is back — restart backoff from 1s
 		this.startPing();
 		try {
 			this.serverKeys = await crypto.subtle.generateKey({
@@ -242,7 +303,13 @@ class NodeCrypt {
 					return
 				}
 			}
-		} catch (e) {}
+		} catch (e) {
+			// Server-key handshake path: never swallow silently. Log ONLY the
+			// error type — the frame itself is remote-controlled and must
+			// never reach the logs (RULES invariant 1).
+			// server-key 握手路径不得静默吞异常：只记错误类型，帧内容绝不入日志（不变量 1）。
+			this.logEvent('onMessage-serverkey', (e && e.name) ? e.name : 'Error', 'error')
+		}
 		if (!this.serverShared) {
 			const parts = event.data.split('|');
 			if (!parts[0] || !parts[1]) {
@@ -666,6 +733,25 @@ class NodeCrypt {
 				}
 				return
 			}
+			if (clientDecrypted.a === 'sd') {
+				// #30: sync-done — a reconnecting peer announces it already
+				// received a replay batch, so pending responders suppress
+				// their own (duplicate) replay to that peer. Carries no
+				// content, only the sender's clientId (from the relay).
+				// #30：sync-done——重连方宣布已收到重播批次，待应答的同伴
+				// 据此抑制自己对该同伴的重复重播。不携带任何内容。
+				if (this.callbacks.onClientSyncDone) {
+					try {
+						this.callbacks.onClientSyncDone({
+							clientId: serverDecrypted.c,
+							username: this.channel[serverDecrypted.c].username
+						})
+					} catch (error) {
+						this.logEvent('onMessage-client-sync-done-callback', error, 'error')
+					}
+				}
+				return
+			}
 			if (clientDecrypted.a === 'rs' && Array.isArray(clientDecrypted.msgs)) {
 				// P2: peer replay batch (unicast response to 'sync'). Entries are
 				// strictly sanitized — text/image only, hard size caps, id whitelist.
@@ -769,10 +855,17 @@ class NodeCrypt {
 	startReconnect() {
 		this.stopReconnect();
 		this.logEvent('startReconnect');
+		// #13: exponential backoff 1s→30s cap with ±50% jitter (was a fixed
+		// 3s — a server blip made every client retry in lockstep and collide
+		// with the per-IP handshake rate limit).
+		// #13：指数退避 1s→30s 封顶 + ±50% 抖动（原固定 3s——服务端闪断时
+		// 全网客户端同拍重连，与单 IP 握手限流互相误伤）。
+		const delay = computeReconnectDelay(this.reconnectAttempts);
+		this.reconnectAttempts++;
 		this.reconnect = setTimeout(() => {
 			this.reconnect = null;
 			this.connect()
-		}, this.config.reconnectDelay)
+		}, delay)
 	}
 
 	// Stop reconnect timer
@@ -844,6 +937,22 @@ class NodeCrypt {
 		return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
 	}
 
+	// #16: fire the oversize notice callback (best-effort, never throws).
+	// #16：触发超限提示回调（尽力而为，绝不抛错）。
+	notifyChannelFrameTooLarge(memberCount, estimatedBytes) {
+		if (this.callbacks.onChannelFrameTooLarge) {
+			try {
+				this.callbacks.onChannelFrameTooLarge({
+					memberCount,
+					estimatedBytes,
+					limitBytes: estimateRoomFileLimitBytes(memberCount)
+				})
+			} catch (error) {
+				this.logEvent('notifyChannelFrameTooLarge', error, 'error')
+			}
+		}
+	}
+
 	sendChannelMessage(type, data, extras) {
 		if (this.serverShared) {
 			try {
@@ -851,6 +960,27 @@ class NodeCrypt {
 				// SECURITY: extras travel inside the E2EE content layer only;
 				// the server relays them opaquely and can never read them.
 				const messageId = this.genMessageId();
+				// #16: pre-check the estimated frame size BEFORE paying the
+				// per-member encryption cost. Oversize used to fail silently
+				// at the post-encryption length check (return false, no
+				// explanation) — now the user is told the room's approx.
+				// per-file limit via onChannelFrameTooLarge.
+				// #16：加密前先按成员数预检估算帧尺寸。超限过去在加密后
+				// 的长度检查处静默 return false——现在经
+				// onChannelFrameTooLarge 明确告知用户当前房间的单文件上限。
+				{
+					let memberCount = 0;
+					for (const cid in this.channel) {
+						if (this.channel[cid].shared && this.channel[cid].username) memberCount++;
+					}
+					let contentLen = 0;
+					try { contentLen = JSON.stringify({ a: 'm', t: type, d: data }).length; } catch (_e) { contentLen = 0; }
+					const estimated = estimateChannelFrameBytes(memberCount, contentLen);
+					if (memberCount > 0 && estimated > FRAME_LIMIT_BYTES) {
+						this.notifyChannelFrameTooLarge(memberCount, estimated);
+						return (false)
+					}
+				}
 				let payloads = {};
 				for (const clientId in this.channel) {
 					if (this.channel[clientId].shared && this.channel[clientId].username) {
@@ -876,6 +1006,11 @@ class NodeCrypt {
 						p: payloads,
 					}, this.serverShared);
 					if (!this.isOpen() || payload.length === 0 || payload.length > (8 * 1024 * 1024)) {
+						// #16: an actual oversize frame gets the same explicit
+						// notice as the pre-check — never a silent false.
+						if (payload.length > (8 * 1024 * 1024)) {
+							this.notifyChannelFrameTooLarge(Object.keys(payloads).length, payload.length);
+						}
 						return (false)
 					}
 					this.connection.send(payload)
@@ -898,7 +1033,9 @@ class NodeCrypt {
 				// SECURITY: validate locally before sending; receivers re-validate.
 				const safeId = String(targetMessageId || '');
 				const safeEmoji = String(emoji || '');
-				if (!/^[A-Za-z0-9]{8,32}$/.test(safeId) || !safeEmoji || safeEmoji.length > 16) {
+				// Item 20: reactions are a single grapheme cluster (full
+				// picker range), hard-capped — see util.validate.js.
+				if (!/^[A-Za-z0-9]{8,32}$/.test(safeId) || !isValidReactionEmoji(safeEmoji)) {
 					return (false)
 				}
 				let payloads = {};
@@ -1206,6 +1343,41 @@ class NodeCrypt {
 				return (true)
 			} catch (error) {
 				this.logEvent('sendSyncRequest', error, 'error')
+			}
+		}
+		return (false)
+	}
+
+	// #30: broadcast "sync done" — this client has received a replay batch
+	// after reconnecting; peers with a pending (delayed) replay response to
+	// us suppress it. Rides the same E2EE channel fanout as 'sync', np:1.
+	// #30：广播「sync 已满足」——本端重连后已收到重播批次；持有待发
+	// （延迟中）重播应答的同伴据此抑制。与 'sync' 同走 E2EE 频道扇出。
+	sendSyncDone() {
+		if (this.serverShared) {
+			try {
+				let payloads = {};
+				for (const clientId in this.channel) {
+					if (this.channel[clientId].shared && this.channel[clientId].username) {
+						payloads[clientId] = this.encryptClientMessage({
+							a: 'sd'
+						}, this.channel[clientId].shared);
+					}
+				}
+				if (Object.keys(payloads).length > 0) {
+					const payload = this.encryptServerMessage({
+						a: 'w',
+						p: payloads,
+						np: 1
+					}, this.serverShared);
+					if (!this.isOpen() || payload.length === 0 || payload.length > (8 * 1024 * 1024)) {
+						return (false)
+					}
+					this.connection.send(payload)
+				}
+				return (true)
+			} catch (error) {
+				this.logEvent('sendSyncDone', error, 'error')
 			}
 		}
 		return (false)
@@ -1627,6 +1799,7 @@ class NodeCrypt {
 			stored = localStorage.getItem(this.pinKey())
 		} catch (error) {
 			this.logEvent('handleServerKey', error, 'error')
+			this.notifyPinPersistFailed()
 		}
 		const pinned = this.config.rsaPublicFixed ? this.config.rsaPublic : stored;
 		if (pinned) {
@@ -1641,6 +1814,7 @@ class NodeCrypt {
 						localStorage.setItem(this.pinKey(), serverKey)
 					} catch (error) {
 						this.logEvent('handleServerKey', error, 'error')
+						this.notifyPinPersistFailed()
 					}
 					this.config.rsaPublic = serverKey;
 					this.logEvent('handleServerKey', 'server key rotated — migration signature verified, pin updated');
@@ -1660,6 +1834,7 @@ class NodeCrypt {
 						localStorage.setItem(this.pinKey(), serverKey)
 					} catch (error) {
 						this.logEvent('handleServerKey', error, 'error')
+						this.notifyPinPersistFailed()
 					}
 					this.config.rsaPublic = serverKey;
 					this.logEvent('handleServerKey', 'user accepted new server key, pin reset');
@@ -1683,9 +1858,46 @@ class NodeCrypt {
 			localStorage.setItem(this.pinKey(), serverKey);
 		} catch (error) {
 			this.logEvent('handleServerKey', error, 'error')
+			this.notifyPinPersistFailed()
 		}
 		this.config.rsaPublic = serverKey;
 		return true
+	}
+
+	// One-time user notice when the TOFU pin cannot be read from / written
+	// to localStorage (private browsing, storage disabled, quota): without
+	// it, every reconnect is silently a "first connect" and a changed
+	// server key would never trigger the mismatch path (RULES invariant 3
+	// forbids silent trust changes). Notice ONLY — no logic changes: the
+	// pin stays valid in memory for this session.
+	// Overridable via callbacks.onPinPersistFailed (same level as
+	// onServerKeyMismatch); falls back to a native alert.
+	// pin 读写失败时的一次性用户提示（隐私模式/存储禁用/配额满）：否则每次
+	// 重连都静默变成「首连」，服务器密钥变更永不触发 mismatch（违反不变量
+	// 3 的「不得静默信任」）。纯提示、无逻辑变更：pin 本次会话内在内存有效。
+	// 可经 onPinPersistFailed 回调自定义（与 onServerKeyMismatch 同级），
+	// 缺省回退原生 alert。
+	notifyPinPersistFailed() {
+		if (this._pinPersistWarned) {
+			return
+		}
+		this._pinPersistWarned = true;
+		const message = t('security.pin_persist_failed', 'The server key pin could not be saved on this device, so it is valid for this session only.');
+		if (this.callbacks.onPinPersistFailed) {
+			try {
+				this.callbacks.onPinPersistFailed(message)
+			} catch (error) {
+				this.logEvent('notifyPinPersistFailed', error, 'error')
+			}
+			return
+		}
+		if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+			try {
+				window.alert('⚠️ ' + message)
+			} catch (error) {
+				this.logEvent('notifyPinPersistFailed', error, 'error')
+			}
+		}
 	}
 
 	// Verify a key-rotation migration signature: the pinned (previous) public

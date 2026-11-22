@@ -70,7 +70,7 @@ const batch = [];
 for (let i = 0; i < 8; i++) batch.push(alice2.encryptOutgoing({ a: 'm', t: 'text', d: 'oo-' + i }));
 const shuffled = [batch[3], batch[1], batch[7], batch[0], batch[5], batch[2], batch[6], batch[4]];
 let okOO = true;
-shuffled.forEach((w, k) => {
+shuffled.forEach((w) => {
 	const obj = bob2.decryptIncoming(w);
 	if (!obj || !String(obj.d).startsWith('oo-')) okOO = false;
 });
@@ -155,7 +155,7 @@ check('huge-but-plausible gap advances the chain (no wedge)', (() => {
 	const a = new PeerRatchet({ rootKey: rootOf('live'), rekeyEvery: 0, skippedCap: 10 });
 	const b = new PeerRatchet({ rootKey: rootOf('live'), isFirst: true, rekeyEvery: 0, skippedCap: 10 });
 	for (let i = 0; i < 200; i++) a.encryptOutgoing({ a: 'm', t: 'text', d: 'x' + i });
-	const w200 = null; // ci 0..199 lost (server held them)
+	// ci 0..199 lost (server held them)
 	// a fresh message ci=200 arrives: gap 200 > cap 10 → still decrypts
 	const w = a.encryptOutgoing({ a: 'm', t: 'text', d: 'alive' });
 	const got = b.decryptIncoming(w);

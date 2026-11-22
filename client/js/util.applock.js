@@ -15,6 +15,10 @@
 // A user with DevTools access can remove the overlay. Documented in settings.
 
 import { t } from './util.i18n.js';
+// Item 14: panic is imported statically everywhere (main.js, util.settings.js
+// and here) — a single import style, so the bundler no longer warns about a
+// mixed static+dynamic import and silently keeps it in the entry chunk.
+import { panicWipe } from './util.panic.js';
 
 const CRED_KEY = 'jmlt_applock_cred';   // localStorage key for the credential id
 export const LOCK_AFTER_HIDDEN_MS = 5 * 60 * 1000; // lock after 5 min hidden
@@ -164,8 +168,7 @@ function showLockOverlay() {
 			if (!ok) return;
 			disableAppLock();
 			try {
-				const mod = await import('./util.panic.js');
-				await mod.panicWipe();
+				await panicWipe();
 			} catch (_e) {
 				try { localStorage.clear(); } catch (_e2) { /* ignore */ }
 				location.reload();

@@ -783,6 +783,13 @@ flex-direction: column;
 	padding-left: unset;
 	padding-right: unset;
 	transition: color 0.2s ease, background-color 0.2s ease, transform 0.2s ease;
+	position: relative;
+}
+/* Item 19: expanded touch target, visual size unchanged. */
+.chat-emoji-btn::after {
+	content: '';
+	position: absolute;
+	inset: -8px -4px;
 }
 
 .chat-emoji-btn:hover {
@@ -1219,6 +1226,24 @@ flex-direction: column;
 .file-download-btn:hover {
 	background: linear-gradient(135deg, #2196f3, #42a5f5);
 	transform: translateY(-2px);
+}
+
+/* #26: manual release entry for a completed received transfer */
+.file-release-btn {
+	margin-left: 6px;
+	padding: 2px 8px;
+	font-size: 11px;
+	color: #888;
+	background: transparent;
+	border: 1px solid #ccc;
+	border-radius: 10px;
+	cursor: pointer;
+	align-self: center;
+}
+
+.file-release-btn:hover {
+	color: #555;
+	border-color: #999;
 }
 
 .file-download-btn:active {
@@ -1898,6 +1923,13 @@ h2{
   cursor: pointer;
   opacity: .75;
   transition: opacity .15s ease, transform .15s ease;
+  position: relative;
+}
+/* Item 19: ~40px touch target, visual size unchanged. */
+.msg-react-btn::after {
+  content: '';
+  position: absolute;
+  inset: -10px -2px;
 }
 .msg-react-btn:hover {
   opacity: 1;
@@ -1926,6 +1958,13 @@ h2{
   cursor: pointer;
   user-select: none;
   transition: background .15s ease, border-color .15s ease;
+  position: relative;
+}
+/* Item 19: ~40px tall touch target, visual size unchanged. */
+.msg-reaction-chip::after {
+  content: '';
+  position: absolute;
+  inset: -11px 0;
 }
 .msg-reaction-chip:hover {
   background: var(--bg-hover, #e9ecef);
@@ -1956,6 +1995,22 @@ h2{
   border-radius: 10px;
   cursor: pointer;
   transition: transform .12s ease, background .12s ease;
+  position: relative;
+}
+/* Item 19: ~40px touch target, visual size unchanged. */
+.reaction-option::after {
+  content: '';
+  position: absolute;
+  inset: -6px -4px;
+}
+/* Item 20: full emoji picker floated for reactions */
+.reaction-full-picker {
+  position: fixed !important;
+  bottom: auto !important;
+  z-index: 1001;
+  display: block;
+  opacity: 1;
+  transform: none;
 }
 .reaction-option:hover {
   transform: scale(1.25);
@@ -2488,6 +2543,13 @@ html[data-mode="dark"] .share-qr-box {
 	border-radius: 8px;
 	color: #6e6e6e;
 	align-self: center;
+	position: relative;
+}
+/* Item 19: ~42px touch target, visual size unchanged. */
+.chat-burn-btn::after {
+	content: '';
+	position: absolute;
+	inset: -8px -6px;
 }
 .chat-burn-btn:hover {
 	background: rgba(0, 0, 0, .06);
@@ -2575,6 +2637,14 @@ html[data-mode="dark"] .msg-read {
 	border-radius: 8px;
 	color: #6e6e6e;
 	align-self: center;
+	position: relative;
+}
+/* Item 19: expand the touch target to ~40px via a pseudo-element without
+   changing the visual size. */
+.chat-search-btn::after {
+	content: '';
+	position: absolute;
+	inset: -8px -6px;
 }
 .chat-search-btn:hover {
 	background: rgba(0, 0, 0, .06);
@@ -2813,6 +2883,13 @@ html[data-mode="dark"] .jmlt-fwd-room:hover {
 	border-radius: 8px;
 	color: #6e6e6e;
 	align-self: center;
+	position: relative;
+}
+/* Item 19: ~40px touch target, visual size unchanged. */
+.chat-voice-btn::after {
+	content: '';
+	position: absolute;
+	inset: -8px -6px;
 }
 .chat-voice-btn:hover {
 	background: rgba(0, 0, 0, .06);
@@ -3189,6 +3266,14 @@ html[data-mode="dark"] .chat-call-btn:hover, html[data-mode="dark"] .chat-video-
 	display: block; background: #111;
 }
 .jmlt-file-preview-generic { padding: 40px 24px; text-align: center; font-size: 15px; color: #555; }
+.jmlt-file-preview-media { width: 100%; max-height: 68vh; display: block; background: #111; }
+.jmlt-file-preview-audio { width: 100%; display: block; padding: 24px 16px; box-sizing: border-box; }
+.jmlt-file-preview-pdf { width: min(92vw, 720px); height: 68vh; border: 0; display: block; background: #fff; }
+.jmlt-file-preview-text {
+	margin: 0; padding: 14px 16px; overflow: auto; max-height: 68vh;
+	white-space: pre-wrap; word-break: break-word; font-size: 13px;
+	line-height: 1.5; text-align: left; font-family: ui-monospace, Menlo, Consolas, monospace;
+}
 .jmlt-file-preview-actions {
 	display: flex; gap: 10px; padding: 10px 14px;
 	border-top: 1px solid #eee; justify-content: flex-end;

@@ -61,7 +61,18 @@ export default defineConfig({
 				// 手动分块
 				manualChunks: (id) => {
 					if (id.includes('node_modules')) {
-						if (/aes-js|elliptic|js-chacha20|js-sha256/.test(id)) {
+						// Item 14: lazily dynamic-imported libraries get their
+						// own chunks so they stay out of the first-screen
+						// preload set and load on demand only.
+						if (id.includes('emoji-picker-element')) {
+							return 'emoji-picker'
+						}
+						if (id.includes('qrcode-generator')) {
+							return 'qrcode'
+						}
+						// (aes-js / js-chacha20 are no longer dependencies —
+						// the crypto stack is elliptic + js-sha256 + @stablelib.)
+						if (/elliptic|js-sha256|@stablelib/.test(id)) {
 							return 'crypto-libs'
 						}
 						return 'vendor-deps'
@@ -104,6 +115,6 @@ export default defineConfig({
 	optimizeDeps: {
 		// Include
 		// 包含
-		include: ['buffer', 'aes-js', 'elliptic', 'js-chacha20', 'js-sha256', '@dicebear/core', '@dicebear/micah'],
+		include: ['buffer', 'elliptic', 'js-sha256', '@dicebear/core', '@dicebear/micah'],
 	},
 });

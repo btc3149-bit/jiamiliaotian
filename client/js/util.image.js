@@ -6,36 +6,78 @@ import {
 	createElement
 } from './util.dom.js';
 
+// Feature probe: createImageBitmap decodes straight from the File/Blob,
+// skipping the FileReader -> dataURL -> <img> round-trip (one full-size
+// base64 copy of the source image). Older WebViews may lack it, so the
+// legacy path below stays as the fallback.
+// 特性探测：createImageBitmap 直读 File/Blob，省掉 FileReader→dataURL→<img>
+// 一整份 base64 拷贝；旧 WebView 可能没有，保留旧路径作 fallback。
+export function hasCreateImageBitmap() {
+	return typeof createImageBitmap === 'function'
+}
+
+// Draw a decoded source (Image or ImageBitmap) onto a capped canvas and
+// export webp. Shared by both decode paths so output stays identical.
+// 把已解码的源绘到限尺寸 canvas 并导出 webp，两条解码路径共用、产物一致。
+function drawDecodedToDataUrl(source, srcW, srcH) {
+	const maxW = 1280, // Max width
+		maxH = 1280;    // 最大宽度/高度
+	let w = srcW,
+		h = srcH;
+	// Resize if too large
+	// 如果图片过大则缩放
+	if (w > maxW || h > maxH) {
+		const scale = Math.min(maxW / w, maxH / h);
+		w = Math.round(w * scale);
+		h = Math.round(h * scale)
+	}
+	// Create canvas for drawing image
+	// 创建画布用于绘制图片
+	const canvas = createElement('canvas');
+	canvas.width = w;
+	canvas.height = h;
+	const ctx = canvas.getContext('2d');
+	ctx.drawImage(source, 0, 0, w, h);
+	// Export as webp with 90% quality
+	// 导出为 webp，90% 质量
+	return canvas.toDataURL('image/webp', 0.90)
+}
+
 // Process and compress image file
 // 处理并压缩图片文件
 export async function processImage(file, callback) {
-	// Create image element for loading file
-	// 创建图片元素用于加载文件
+	// Fast path (upgrade #29a): createImageBitmap first.
+	// 快路径（升级 #29a）：createImageBitmap 先行。
+	// NOTE: moving the redraw+encode itself into a Worker / OffscreenCanvas
+	// is the M-sized follow-up and is intentionally NOT done here — the
+	// regression surface (old Android WebViews without OffscreenCanvas,
+	// canvas taint/EXIF-orientation differences) needs its own pass.
+	// 注：重绘+编码搬 Worker/OffscreenCanvas 是 M 级后续，本轮不做——旧
+	// Android WebView 兼容与方向/污染回归面需单独一轮。
+	if (hasCreateImageBitmap()) {
+		try {
+			let bitmap = null;
+			try {
+				bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' })
+			} catch (_optErr) {
+				bitmap = await createImageBitmap(file)
+			}
+			try {
+				callback(drawDecodedToDataUrl(bitmap, bitmap.width, bitmap.height))
+			} finally {
+				if (bitmap && typeof bitmap.close === 'function') bitmap.close()
+			}
+			return
+		} catch (_bitmapErr) {
+			// fall through to the legacy path below
+			// 落回下面的旧路径
+		}
+	}
+	// Legacy fallback: FileReader dataURL -> <img> decode.
+	// 旧路径 fallback：FileReader dataURL -> <img> 解码。
 	const img = new Image();
 	img.onload = function() {
-		const maxW = 1280, // Max width
-			maxH = 1280;    // 最大宽度/高度
-		let w = img.naturalWidth,
-			h = img.naturalHeight;
-		// Resize if too large
-		// 如果图片过大则缩放
-		if (w > maxW || h > maxH) {
-			const scale = Math.min(maxW / w, maxH / h);
-			w = Math.round(w * scale);
-			h = Math.round(h * scale)
-		}
-		// Create canvas for drawing image
-		// 创建画布用于绘制图片
-		const canvas = createElement('canvas');
-		canvas.width = w;
-		canvas.height = h;
-		const ctx = canvas.getContext('2d');
-		ctx.drawImage(img, 0, 0, w, h);
-		let dataUrl;
-		// Export as webp with 90% quality
-		// 导出为 webp，90% 质量
-		dataUrl = canvas.toDataURL('image/webp', 0.90);
-		callback(dataUrl)
+		callback(drawDecodedToDataUrl(img, img.naturalWidth, img.naturalHeight))
 	};
 	// Read file as data URL
 	// 以 dataURL 方式读取文件

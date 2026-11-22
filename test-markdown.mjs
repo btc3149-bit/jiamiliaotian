@@ -2,7 +2,6 @@
 // Node-runnable: util.markdown.js has zero imports.
 import {
 	tokenizeMarkdown,
-	renderMarkdownTokens,
 	markdownToHtml,
 	isSafeLinkUrl
 } from './client/js/util.markdown.js';

@@ -8,7 +8,8 @@ import {
 	setupFileSend,
 	handleFileMessage,
 	downloadFile,
-	previewFile
+	previewFile,
+	releaseTransferData
 } from './util.file.js';
 
 // P2: 拖拽文件直投上传模态框 / Drop files straight into the upload modal
@@ -104,6 +105,8 @@ import {
 import { switchRoom } from './room.js';
 // P1-C: Web Push 房间表访问器注入 / Web Push room-list accessor injection
 import { registerRoomListAccessor } from './util.push.js';
+// Item 48: module-level callback registry replacing window.__jmlt* bridges
+import { registerBridge } from './util.bridge.js';
 
 // v1.1.0 #2: 恐慌清除（双确认）/ Panic wipe (double-confirmed)
 import { panicWipeWithConfirm } from './util.panic.js';
@@ -186,13 +189,11 @@ updateStaticTexts();
 
 // 把一些函数挂载到 window 对象上供其他模块使用
 // Expose functions to the global window object for accessibility
-window.addSystemMsg = addSystemMsg;
-window.addOtherMsg = addOtherMsg;
-window.joinRoom = joinRoom;
-window.notifyMessage = notifyMessage;
-window.setupEmojiPicker = setupEmojiPicker;
-window.handleFileMessage = handleFileMessage;
-window.downloadFile = downloadFile;
+registerBridge('addSystemMsg', addSystemMsg);
+registerBridge('addOtherMsg', addOtherMsg);
+registerBridge('joinRoom', joinRoom);
+registerBridge('notifyMessage', notifyMessage);
+registerBridge('handleFileMessage', handleFileMessage);
 
 // v1.8.3 CSP fix: the deployed worker sets script-src 'self' (no
 // 'unsafe-inline'), so inline event-handler ATTRIBUTES are REFUSED by
@@ -229,18 +230,37 @@ document.addEventListener('click', (e) => {
 	const fileId = wrap ? wrap.getAttribute('data-file-id') : '';
 	if (!fileId) return;
 	const transfer = window.fileTransfers && window.fileTransfers.get(fileId);
-	if (!transfer || transfer.isArchive || !transfer.volumeData || !transfer.volumeData.length) return;
+	// #26: after the first decode the volumes are released and only the
+	// cached Blob remains — that is still previewable. A 'released'
+	// transfer falls through to previewFile, which explains the state.
+	if (!transfer || transfer.isArchive) return;
+	if (transfer.status !== 'released' && !transfer.blobCache && (!transfer.volumeData || !transfer.volumeData.length)) return;
 	e.preventDefault();
 	previewFile(fileId);
+});
+
+// #26: manual release entry — frees a completed transfer's data on demand
+// (the automatic expiry is 30 minutes; this is the immediate version).
+document.addEventListener('click', (e) => {
+	const btn = e.target && e.target.closest ? e.target.closest('.file-release-btn') : null;
+	if (!btn) return;
+	const wrap = btn.closest('[data-file-id]');
+	const fileId = wrap ? wrap.getAttribute('data-file-id') : '';
+	if (!fileId) return;
+	e.preventDefault();
+	if (releaseTransferData(fileId)) {
+		// re-render the room so the bubble switches to the released state
+		if (window.__jmltRenderChat) window.__jmltRenderChat();
+	}
 });
 // v1.3.0 #6/#7: settings panel lives in util.settings.js which cannot import
 // the renderers without a cycle — expose hooks instead.
 // v1.3.0 #6/#7：设置面板在 util.settings.js，直接导入渲染器会成环——改挂钩子。
-window.__jmltRenderRooms = () => renderRooms(activeRoomIndex);
-window.__jmltRenderChat = () => renderChatArea();
-window.__jmltAppendLocalHistory = (rd, entry) => {
+registerBridge('renderRooms', () => renderRooms(activeRoomIndex));
+registerBridge('renderChat', () => renderChatArea());
+registerBridge('appendLocalHistory', (rd, entry) => {
 	try { appendLocalHistory(rd, entry) } catch (_e) { /* best-effort */ }
-};
+});
 
 // v1.4.0 #14: prefill the login form with migrated credentials. Works both
 // on the login page (fill the main form) and inside a room (open the join
@@ -255,7 +275,7 @@ function fillLoginFormFields(prefix, data) {
 	if (p) { p.value = data.password || ''; p.readOnly = false; p.style.color = ''; p.style.background = ''; }
 	if (u && data.username) u.value = data.username;
 }
-window.__jmltOpenLoginPrefill = (data) => {
+function openLoginPrefill(data) {
 	if (!data || !data.roomName) return;
 	const loginContainer = $id('login-container');
 	const onLoginPage = !!(loginContainer && loginContainer.style.display !== 'none');
@@ -267,14 +287,15 @@ window.__jmltOpenLoginPrefill = (data) => {
 		openLoginModal();
 		fillLoginFormFields('-modal', data);
 	}
-};
+}
+registerBridge('openLoginPrefill', openLoginPrefill);
 
 // ==================== v1.5.0 #16: WebRTC call manager ====================
 // 通话管理器装在 main.js（信令回调经 room.js 的 window 钩子转发进来）。
 let callManager = null;
-window.__jmltOnCallSignal = (r) => { if (callManager) callManager.handleSignal(r) };
-window.__jmltOnCallPeerLeft = (clientId) => { if (callManager) callManager.handlePeerLeft(clientId) };
-window.__jmltUpdateCallBtn = () => {
+registerBridge('onCallSignal', (r) => { if (callManager) callManager.handleSignal(r) });
+registerBridge('onCallPeerLeft', (clientId) => { if (callManager) callManager.handlePeerLeft(clientId) });
+registerBridge('updateCallBtn', () => {
 	// v1.9.2: two call buttons — 📞 voice / 🎥 video — both gated on having a
 	// private-chat target. / 双通话按钮，均以私聊对象为可见前提。
 	for (const sel of ['.chat-call-btn', '.chat-video-btn']) {
@@ -283,7 +304,7 @@ window.__jmltUpdateCallBtn = () => {
 		const rd = roomsData[activeRoomIndex];
 		btn.style.display = (rd && rd.privateChatTargetId) ? '' : 'none';
 	}
-};
+});
 
 // 当 DOM 内容加载完成后执行初始化逻辑
 // Run initialization logic when the DOM content is fully loaded
@@ -336,7 +357,7 @@ window.addEventListener('DOMContentLoaded', () => {
 			const key = window.prompt(t('settings.import_creds_key', 'Migration key (to decrypt the credentials):') || '');
 			if (key) {
 				decryptMigration(bytes, key).then((data) => {
-					window.__jmltOpenLoginPrefill(data);
+					openLoginPrefill(data);
 					addSystemMsg(t('migration.prefilled', 'Room credentials imported from migration link — review and press ENTER to join.'), true)
 				}).catch((err) => {
 					const expired = err && err.message === 'expired';
@@ -958,7 +979,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
 // Listen for language change events
 // 监听语言切换事件
-window.addEventListener('languageChange', (event) => {
+window.addEventListener('languageChange', () => {
 	updateStaticTexts();
 });
 
@@ -990,7 +1011,7 @@ document.addEventListener('dragenter', (e) => {
 	}
 });
 
-document.addEventListener('dragleave', (e) => {
+document.addEventListener('dragleave', () => {
 	dragCounter--;
 	if (dragCounter === 0) {
 		hasTriggeredAttach = false;

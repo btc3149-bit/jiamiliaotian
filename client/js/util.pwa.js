@@ -31,6 +31,27 @@ export function initPWA() {
 	});
 }
 
+/** 当前是否已捕获可用的安装提示（设置页「安装应用」按钮据此渲染）。 */
+export function canInstall() {
+	return !!deferredPrompt;
+}
+
+/** 是否已以独立应用模式运行（已安装并从主屏幕/桌面图标打开）。 */
+export function isStandalone() {
+	try {
+		if (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) return true;
+	} catch (_e) { /* ignore */ }
+	return !!(window.navigator && window.navigator.standalone === true); // iOS Safari
+}
+
+/** 是否 iOS/iPadOS（这类浏览器不提供 beforeinstallprompt，需手动指引）。 */
+export function isIOSDevice() {
+	const ua = (window.navigator && window.navigator.userAgent) || '';
+	if (/iphone|ipad|ipod/i.test(ua)) return true;
+	// iPadOS 13+ reports as macOS Safari; detect via touch points.
+	return /macintosh/i.test(ua) && !!(window.navigator && window.navigator.maxTouchPoints > 1);
+}
+
 /**
  * 触发浏览器安装弹窗（需 beforeinstallprompt 已捕获）。
  * @returns {Promise<boolean>} 用户是否接受安装
