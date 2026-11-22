@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.repository == 'btc3149-bit/jiamiliaotian'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
