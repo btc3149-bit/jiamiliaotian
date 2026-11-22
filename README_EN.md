@@ -23,6 +23,8 @@ docker build -t jiamiliaotian . && docker run -d --name jiamiliaotian -p 80:80 j
 
 Access http://localhost:80
 
+> **TLS note for Docker deployments**: The Docker image serves plain HTTP only (port 80). In production, always put a TLS-terminating reverse proxy in front of it (e.g. Caddy / Nginx / Cloudflare Tunnel) and let that layer redirect HTTP to HTTPS and send `Strict-Transport-Security: max-age=31536000; includeSubDomains`. Do not expose port 80 directly to the public internet in plaintext.
+
 ### Method 4: Local Development Deployment
 After cloning the project and installing dependencies, use `npm run dev` to start the development server.
 Use `npm run deploy` to deploy to Cloudflare Workers.
