@@ -149,7 +149,7 @@ jobs:
 
       - name: Attach APK to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2 (pinned by commit SHA; was floating @v2)
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v2.6.2 (pinned by commit SHA; was floating @v2)
         with:
           fail_on_unmatched_files: false
           files: release-assets/*.apk
@@ -267,7 +267,7 @@ jobs:
 
       - name: Attach AAB to GitHub Release
         if: steps.sign.outputs.mode == 'release' && startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2 (pinned by commit SHA; was floating @v2)
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v2.6.2 (pinned by commit SHA; was floating @v2)
         with:
           fail_on_unmatched_files: false
           files: release-assets/*.aab
