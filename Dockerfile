@@ -1,6 +1,6 @@
 # Use a Node.js 18 Alpine base image for the backend builder
 # 使用 Node.js 18 Alpine 基础镜像作为后端构建器
-FROM node:18-alpine AS backend-builder
+FROM node:26-alpine AS backend-builder
 
 WORKDIR /app
 
@@ -17,7 +17,7 @@ COPY server/server.js ./server/
 
 # Frontend build stage
 # 前端构建阶段
-FROM node:18-alpine AS frontend-builder
+FROM node:26-alpine AS frontend-builder
 
 WORKDIR /app
 
