@@ -15,6 +15,7 @@ import {
 	$,
 	$id,
 	createElement,
+	createElementHTML,
 	on,
 	off,
 	addClass,
@@ -111,7 +112,7 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 	// P1-B: tombstone rendering for recalled / burned entries
 	const safeMidEarly = (meta && meta.id && /^[A-Za-z0-9]{8,32}$/.test(meta.id)) ? meta.id : null;
 	if (safeMidEarly && meta && (meta.deleted || meta.burned)) {
-		const tomb = createElement('div', {
+		const tomb = createElementHTML('div', {
 			class: className + ' recalled',
 			'data-mid': safeMidEarly
 		}, `<span class="bubble-content"><span class="msg-recalled">${escapeHTML(t(meta.burned ? 'ui.burned' : 'ui.recalled', meta.burned ? 'Message expired' : 'Message recalled'))}</span></span><span class="bubble-meta">${time}</span>`);
@@ -193,7 +194,7 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 	const readChipHtml = (meta && meta.read)
 		? `<span class="msg-read">✓✓</span>`
 		: (safeMid ? `<span class="msg-read" hidden>✓✓</span>` : '');
-	const div = createElement('div', {
+	const div = createElementHTML('div', {
 		class: className,
 		...(safeMid ? { 'data-mid': safeMid } : {})
 	}, `<span class="bubble-content">${quoteHtml}${contentHtml}${editedMark}</span>${actionsHtml}<span class="bubble-meta">${burnMark}${time}${readChipHtml}</span>`);
@@ -339,7 +340,7 @@ export function addSystemMsg(text, isHistory = false, timestamp = null) {
 	const chatArea = $id('chat-area');
 	if (!chatArea) return;
 	const safeText = textToHTML(text);
-	const div = createElement('div', {
+	const div = createElementHTML('div', {
 		class: 'bubble system'
 	}, `<span class="bubble-content">${safeText}</span>`);
 	chatArea.appendChild(div);
@@ -387,7 +388,7 @@ export function setupImagePreview() {
 // Show the image modal
 // 显示图片模态框
 export function showImageModal(src) {
-	const modal = createElement('div', {
+	const modal = createElementHTML('div', {
 		class: 'img-modal-bg'
 	}, `<div class="img-modal-blur"></div><div class="img-modal-content img-modal-content-overflow"><img src="${src}"class="img-modal-img"/><span class="img-modal-close">&times;</span></div>`);
 	document.body.appendChild(modal);
@@ -1323,7 +1324,7 @@ function renderSelectBar() {
 		return
 	}
 	if (!bar) {
-		bar = createElement('div', { id: 'jmlt-select-bar', class: 'jmlt-select-bar' }, [
+		bar = createElementHTML('div', { id: 'jmlt-select-bar', class: 'jmlt-select-bar' }, [
 			'<span class="jmlt-sel-count"></span>',
 			'<button type="button" class="jmlt-sel-copy"></button>',
 			'<button type="button" class="jmlt-sel-forward"></button>',
@@ -1400,7 +1401,7 @@ function doForwardSelected() {
 		addSystemMsg(t('search.no_other_rooms', 'Open another room first to forward messages.'), true);
 		return
 	}
-	const modal = createElement('div', { class: 'file-upload-modal show' }, [
+	const modal = createElementHTML('div', { class: 'file-upload-modal show' }, [
 		'<div class="file-upload-overlay"></div>',
 		'<div class="file-upload-container">',
 		'<div class="file-upload-header"><h3>' + escapeHTML(t('search.forward_to', 'Forward to…')) + '</h3><button class="file-upload-close jmlt-fwd-close">&times;</button></div>',

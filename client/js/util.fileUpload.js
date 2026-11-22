@@ -4,12 +4,13 @@
 import {
 	$,
 	$id,
-	createElement,
+	createElementHTML,
 	on,
 	addClass,
 	removeClass
 } from './util.dom.js';
 import { formatFileSize } from './util.file.js';
+import { escapeHTML } from './util.string.js';
 import { t } from './util.i18n.js';
 
 // File upload modal state
@@ -92,7 +93,7 @@ function generateFileId() {
 // Create file upload modal
 // 创建文件上传模态框
 function createUploadModal() {
-	const modal = createElement('div', {
+	const modal = createElementHTML('div', {
 		class: 'file-upload-modal'
 	}, `
 		<div class="file-upload-overlay"></div>		<div class="file-upload-container">
@@ -304,12 +305,12 @@ function updateFileList() {
 	fileList.innerHTML = '';
 	
 	for (const [fileId, file] of selectedFiles) {
-		const fileItem = createElement('div', {
+		const fileItem = createElementHTML('div', {
 			class: 'file-item',
 			'data-file-id': fileId
 		}, `
 			<div class="file-item-info">
-				<div class="file-item-name" title="${file.name}">${file.name}</div>
+				<div class="file-item-name" title="${escapeHTML(file.name)}">${escapeHTML(file.name)}</div>
 				<div class="file-item-size">${formatFileSize(file.size)}</div>
 			</div>
 			<button class="file-item-remove" type="button" data-file-id="${fileId}">&times;</button>
