@@ -6,7 +6,7 @@ import { createBucket, bucketAllow, createByteWindow, byteWindowAllow, ipHandsha
 export { VapidStore } from './vapid.js';
 
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env, _ctx) {
     const url = new URL(request.url);
 
     // Web Push：客户端启动订阅前先来取 VAPID 公钥（public by design）。
@@ -96,6 +96,20 @@ export class ChatRoom {  constructor(state, env) {
     // Web Push per-endpoint throttle (memory-only; resets on DO eviction).
     // 推送节流表（仅内存，DO 重启即清零）。
     this.pushThrottle = {};
+
+    // #11: push subscription table cached in DO instance memory. The hot
+    // path (queuePushToSubscribers, once per relayed message) used to do a
+    // storage.get('pushSubs') EVERY message — at the legal file rate of
+    // 50 frames/s that is 50 storage reads/s for a table that almost never
+    // changes. Cache is filled on first read after DO eviction and
+    // invalidated/updated on subscribe/unsubscribe/prune writes. What is
+    // stored and for how long is unchanged (RULES invariant 8).
+    // #11：推送订阅表缓存在 DO 实例内存。热路径（每条转发消息调一次
+    // queuePushToSubscribers）过去每消息做一次 storage.get——合法文件
+    // 帧率 50 帧/s 即 50 次/s 存储读，而订阅表几乎不变。DO 驱逐后首读
+    // 回填；subscribe/unsubscribe/清理写时同步更新缓存。存什么、存多久
+    // 不变（不变量 8）。
+    this.pushSubsCache = null;
 
     this.config = {
       seenTimeout: 60000,
@@ -596,11 +610,32 @@ export class ChatRoom {  constructor(state, env) {
       logEvent('message-client', [clientId, error], 'error');
     }
   }  // Handle channel messages
+  // #28: fanout is serialized through this._fanoutChain and yields to the
+  // event loop every 8 recipients. Per-recipient transport encryption is
+  // synchronous CPU (measured ≈127ms for 64×470KB file frames) and used to
+  // head-of-line block every other message in the room. Serialization is
+  // load-bearing: it preserves the exact per-recipient send order the
+  // synchronous version had, so client ratchet chains still consume in
+  // order — yields happen BETWEEN recipients of one batch, never letting
+  // a later batch overtake an earlier one to the same recipient.
+  // #28：扇出经 this._fanoutChain 串行化，每加密 8 个收件人让行一次
+  // 事件循环。逐收件人传输层加密是同步 CPU（实测 64×470KB 文件帧约
+  // 127ms），过去会队头阻塞同房其他消息。串行化是承重设计：保持与
+  // 同步版完全一致的逐收件人发送顺序，客户端棘轮链仍按序消费——让行
+  // 只发生在同一批次的收件人之间，后一批次不会越过先批次到达同一人。
   handleChannelMessage(clientId, decrypted) {
     if (!isObject(decrypted.p) || !this.clients[clientId].channel) {
       return;
     }
-    
+    const run = () => this._fanoutChannelMessage(clientId, decrypted).catch((error) => {
+      logEvent('message-channel', [clientId, error], 'error');
+    });
+    this._fanoutChain = (this._fanoutChain || Promise.resolve()).then(run, run);
+    return this._fanoutChain;
+  }
+
+  async _fanoutChannelMessage(clientId, decrypted) {
+    if (!this.clients[clientId] || !this.clients[clientId].channel) return;
     try {
       const channel = this.clients[clientId].channel;
       // 过滤有效的目标成员（S-1: 扇出封顶 MAX_FANOUT，超出静默丢弃）
@@ -609,7 +644,8 @@ export class ChatRoom {  constructor(state, env) {
         return isString(decrypted.p[member]) && this.isClientInChannel(targetClient, channel);
       }).slice(0, MAX_FANOUT);
 
-      // 处理所有有效的目标成员
+      // 处理所有有效的目标成员（每 8 个让行一次，见上方 #28 说明）
+      let sent = 0;
       for (const member of validMembers) {
         const targetClient = this.clients[member];
         const messageObj = {
@@ -620,6 +656,10 @@ export class ChatRoom {  constructor(state, env) {
         this.sendMessage(targetClient.connection, encrypted);
 
         messageObj.p = null;
+        sent++;
+        if (sent % 8 === 0 && sent < validMembers.length) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
       }
 
       // Web Push nudge for channel relays too — unless the sender marked
@@ -643,8 +683,19 @@ export class ChatRoom {  constructor(state, env) {
   static get PUSH_THROTTLE_MS() { return 15000; }
 
   async getPushSubs() {
+    // #11: serve from the in-memory cache when warm.
+    if (this.pushSubsCache) return this.pushSubsCache;
     const subs = await this.state.storage.get('pushSubs');
-    return (subs && isObject(subs)) ? subs : {};
+    this.pushSubsCache = (subs && isObject(subs)) ? subs : {};
+    return this.pushSubsCache;
+  }
+
+  // #11: single write path for the subscription table — storage and the
+  // in-memory cache always move together.
+  // #11：订阅表单一写路径——storage 与内存缓存始终同步。
+  async setPushSubs(subs) {
+    this.pushSubsCache = subs;
+    await this.state.storage.put('pushSubs', subs);
   }
 
   async handlePushSubscribe(clientId, decrypted) {
@@ -669,7 +720,7 @@ export class ChatRoom {  constructor(state, env) {
         for (let i = 0; i < excess; i++) delete subs[eps[i]];
       }
       subs[endpoint] = { addedAt: now };
-      await this.state.storage.put('pushSubs', subs);
+      await this.setPushSubs(subs);
     } catch (error) {
       logEvent('push-subscribe', [clientId, error], 'error');
     }
@@ -684,7 +735,7 @@ export class ChatRoom {  constructor(state, env) {
       const subs = await this.getPushSubs();
       if (subs[endpoint]) {
         delete subs[endpoint];
-        await this.state.storage.put('pushSubs', subs);
+        await this.setPushSubs(subs);
       }
     } catch (error) {
       logEvent('push-unsubscribe', [clientId, error], 'error');
@@ -712,7 +763,7 @@ export class ChatRoom {  constructor(state, env) {
       const staleEndpoints = Object.keys(subs).filter((ep) => !isAcceptableEndpoint(ep));
       if (staleEndpoints.length > 0) {
         for (const ep of staleEndpoints) delete subs[ep];
-        await this.state.storage.put('pushSubs', subs);
+        await this.setPushSubs(subs);
       }
       const now = Date.now();
       const due = Object.keys(subs).filter((ep) => {
@@ -742,7 +793,7 @@ export class ChatRoom {  constructor(state, env) {
       if (deadEndpoints.length > 0) {
         const current = await this.getPushSubs();
         for (const ep of deadEndpoints) delete current[ep];
-        await this.state.storage.put('pushSubs', current);
+        await this.setPushSubs(current);
       }
     } catch (error) {
       logEvent('push-broadcast', error, 'error');

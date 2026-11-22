@@ -165,7 +165,7 @@ try {
 // ================= PR-4 (S-1/S-2) black-box sections =================
 // Each section uses a fresh server process (fresh per-IP windows) on its
 // own port via the S-1 env override.
-async function spawnServer(env, port) {
+async function spawnServer(env, _port) {
 	const proc = spawn('node', ['server.js'], { cwd: serverDir, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
 	let log = '';
 	proc.stdout.on('data', d => { log += d; });
@@ -285,7 +285,6 @@ async function waitClose(ws, timeout = 4000) {
 			const targets = {};
 			for (const id of others) targets[id] = 'AAAA';
 			// include the sender itself: 65 target keys in one frame
-			const selfList = members[1].decrypted.filter(m => m.a === 'l');
 			sender.send({ a: 'w', p: targets });
 			await sleep(1500);
 			let deliveries = 0;
@@ -293,6 +292,21 @@ async function waitClose(ws, timeout = 4000) {
 			check('one frame fans out to at most 64 recipients', deliveries === 64);
 		}
 		for (const m of members) m.close();
+	} finally { proc.kill('SIGKILL'); await sleep(200); }
+}
+
+{ // Item 32: /healthz — 200 + bare "ok", no business metadata whatsoever
+	const proc = await spawnServer({ PORT: '8094' }, 8094);
+	try {
+		console.log('=== test-server-integration: /healthz (item 32) ===');
+		const res = await fetch('http://127.0.0.1:8094/healthz');
+		const body = await res.text();
+		check('GET /healthz returns 200', res.status === 200);
+		check('GET /healthz body is exactly "ok"', body === 'ok');
+		check('/healthz leaks no metadata (no key/channel/client/version fields)',
+			!/rsa|key|channel|client|version|member|room/i.test(body));
+		const miss = await fetch('http://127.0.0.1:8094/nope');
+		check('unknown HTTP path returns bare 404', miss.status === 404);
 	} finally { proc.kill('SIGKILL'); await sleep(200); }
 }
 

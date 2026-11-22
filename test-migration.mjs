@@ -14,7 +14,10 @@ import {
 	bytesToB64,
 	b64ToBytes,
 	MIGRATION_MAGIC,
-	MIGRATION_KEY_MIN_LEN
+	MIGRATION_VERSION,
+	MIGRATION_KEY_MIN_LEN,
+	MIGRATION_ITERATIONS,
+	MIGRATION_LEGACY_ITERATIONS
 } from './client/js/util.keyExport.js';
 
 let passed = 0;
@@ -60,7 +63,7 @@ check('room name trimmed', clean && clean.roomName === 'padded');
 console.log('=== test-migration: encrypt/decrypt roundtrip ===');
 const payload = buildMigrationPayload('迁移房间', 'пароль123', 'bob', NOW);
 const blob = await encryptMigration(payload, 'one-time-key');
-check('container starts with magic + version', String.fromCharCode(...blob.slice(0, MIGRATION_MAGIC.length)) === MIGRATION_MAGIC && blob[MIGRATION_MAGIC.length] === 1);
+check('container starts with magic + version', String.fromCharCode(...blob.slice(0, MIGRATION_MAGIC.length)) === MIGRATION_MAGIC && blob[MIGRATION_MAGIC.length] === MIGRATION_VERSION);
 check('container has salt+iv+tag overhead', blob.length >= MIGRATION_MAGIC.length + 1 + 16 + 12 + 16);
 const back = await decryptMigration(blob, 'one-time-key', NOW + 1000);
 check('roundtrip returns room name', back.roomName === '迁移房间');
@@ -139,6 +142,23 @@ check('fixture: username matches', fixtureBack.username === 'fixuser');
 check('fixture: ts matches', fixtureBack.ts === FIXTURE_TS);
 check('fixture: wrong key still bad-key', await decryptMigration(fixtureBytes, 'y', FIXTURE_TS + 1000).catch(e => e.message) === 'bad-key');
 check('fixture: expired still expired', await decryptMigration(fixtureBytes, 'x', FIXTURE_TS + 10 * 60 * 1000 + 1).catch(e => e.message) === 'expired');
+
+console.log('=== test-migration: PBKDF2 600k upgrade (item 36) ===');
+// The v1.9.3 fixture above IS a v1/200k container: its successful decrypt
+// proves the version-byte fallback. New containers must be v2 (600k) and
+// roundtrip; unknown version bytes are rejected as bad-format.
+// 上面的 v1.9.3 fixture 本身就是 v1/200k 容器，能解即证明版本回退生效。
+check('fixture container carries legacy version byte 1', fixtureBytes[MIGRATION_MAGIC.length] === 1);
+check('iteration constants are 600k / legacy 200k', MIGRATION_ITERATIONS === 600000 && MIGRATION_LEGACY_ITERATIONS === 200000);
+{
+	const blob600 = await encryptMigration(payload, '600k-container-key');
+	check('new container carries version byte 2', blob600[MIGRATION_MAGIC.length] === 2);
+	const back600 = await decryptMigration(blob600, '600k-container-key', NOW + 1000);
+	check('v2 (600k) container roundtrips', back600.roomName === payload.n && back600.password === payload.p);
+	const bogus = new Uint8Array(blob600);
+	bogus[MIGRATION_MAGIC.length] = 9;
+	check('unknown container version rejected as bad-format', await decryptMigration(bogus, '600k-container-key', NOW + 1000).catch(e => e.message) === 'bad-format');
+}
 
 console.log(`\ntest-migration: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

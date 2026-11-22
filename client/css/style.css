@@ -1221,6 +1221,24 @@ flex-direction: column;
 	transform: translateY(-2px);
 }
 
+/* #26: manual release entry for a completed received transfer */
+.file-release-btn {
+	margin-left: 6px;
+	padding: 2px 8px;
+	font-size: 11px;
+	color: #888;
+	background: transparent;
+	border: 1px solid #ccc;
+	border-radius: 10px;
+	cursor: pointer;
+	align-self: center;
+}
+
+.file-release-btn:hover {
+	color: #555;
+	border-color: #999;
+}
+
 .file-download-btn:active {
 	transform: translateY(0);
 }

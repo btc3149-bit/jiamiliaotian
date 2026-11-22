@@ -104,13 +104,22 @@ export const decryptMessage = (message, key) => {
 
 };
 
-// SECURITY: server-side logging is disabled by default. Even at debug level,
-// NEVER log decrypted message payloads — Cloudflare Workers logs are retained
-// by the platform and would break the zero-knowledge guarantee.
+// SECURITY: server-side logging is quiet by default. Even when a line is
+// emitted, NEVER log decrypted message payloads, room names or key material
+// — Cloudflare Workers logs are retained by the platform and would break
+// the zero-knowledge guarantee (RULES invariant 1).
+// Aligned with the Node server: 'error' lines are always emitted (production
+// must not fail silently), 'debug'/info stay off unless DEBUG is enabled.
+// Error lines carry ONLY the action (source) and the error TYPE — never the
+// error message or any payload, which could embed remote-controlled data.
+// 安全：服务端日志默认安静；error 级始终放行（与 Node 侧对齐，生产不得
+// 静默失败），debug 仍关闭。error 行只记 action 与错误类型，绝不记错误
+// 消息/payload/房间名/密钥素材（不变量 1）。
 const DEBUG = false;
 
 export const logEvent = (source, message, level) => {
-  if (!DEBUG) {
+  const isError = level === 'error';
+  if (!isError && !DEBUG) {
     return;
   }
 
@@ -121,6 +130,14 @@ export const logEvent = (source, message, level) => {
     ('0' + date.getHours()).slice(-2) + ':' +
     ('0' + date.getMinutes()).slice(-2) + ':' +
     ('0' + date.getSeconds()).slice(-2);
+
+  if (isError) {
+    const errType = (message && typeof message === 'object' && message.name)
+      ? String(message.name)
+      : (message ? typeof message : '');
+    console.log('[' + dateString + ']', 'ERROR', source + (errType ? ':' : ''), errType);
+    return;
+  }
 
   console.log('[' + dateString + ']', (level ? level.toUpperCase() : 'INFO'), source + (message ? ':' : ''), (message ? message : ''));
 };
@@ -133,15 +150,6 @@ export const isString = (value) => {
   return (
     value &&
     Object.prototype.toString.call(value) === '[object String]' ?
-    true :
-    false
-  );
-};
-
-export const isArray = (value) => {
-  return (
-    value &&
-    Object.prototype.toString.call(value) === '[object Array]' ?
     true :
     false
   );

@@ -57,3 +57,6 @@ dist/
 *.jks
 *.keystore
 keystore.properties
+
+# But the committed example must stay trackable (item 35)
+!.env.example

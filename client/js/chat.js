@@ -9,12 +9,14 @@ import {
 } from './room.js';
 import {
 	escapeHTML,
+	sanitizeImageSrc,
 	textToHTML
 } from './util.string.js';
 import {
 	$,
 	$id,
 	createElement,
+	createElementHTML,
 	on,
 	off,
 	addClass,
@@ -37,6 +39,7 @@ import {
 } from './util.voice.js';
 // v1.3.0 #8: whitelisted markdown rendering for text messages
 import { markdownToHtml } from './util.markdown.js';
+import { callBridge } from './util.bridge.js';
 
 // v1.2.0 #9: render a validated voice payload as an inline audio player.
 // data: URL is escaped and javascript: stripped (same treatment as images).
@@ -47,6 +50,23 @@ function renderVoiceHtml(v) {
 	return '<span class="voice-wrap"><audio controls preload="metadata" src="' + src + '" class="voice-audio"></audio><span class="voice-dur">🎙 ' + escapeHTML(formatVoiceDuration(v.dur * 1000)) + '</span></span>'
 }
 
+
+// #15: bulk-render guard. renderChatArea() replays the whole room history
+// through addMsg/addOtherMsg/addSystemMsg, and each of those used to write
+// scrollTop = scrollHeight per message — reading scrollHeight forces a
+// synchronous layout, so N messages = N forced reflows on every room
+// switch. During a bulk render the per-message scroll writes are skipped
+// and renderChatArea sets scrollTop exactly once at the end. Single new
+// messages (outside bulk render) keep the exact old behaviour.
+// #15：批量渲染守卫。renderChatArea() 经 addMsg/addOtherMsg/addSystemMsg
+// 全量重放房间历史，每条过去都写一次 scrollTop = scrollHeight——读
+// scrollHeight 触发同步布局，N 条 = N 次强制回流。批量期间逐条滚动
+// 写入被跳过，renderChatArea 在末尾只设一次。单条新消息行为不变。
+let bulkRenderDepth = 0;
+export function scrollChatToBottom(chatArea) {
+	if (bulkRenderDepth > 0 || !chatArea) return;
+	chatArea.scrollTop = chatArea.scrollHeight;
+}
 
 // Render the chat area
 // 渲染聊天区域
@@ -62,12 +82,19 @@ export function renderChatArea() {
 		return
 	}
 	chatArea.innerHTML = '';
-	roomsData[activeRoomIndex].messages.forEach(m => {
-		const meta = { id: m.id, reactions: m.reactions, mentions: m.mentions, mentionsMe: m.mentionsMe, quote: m.quote, ttl: m.ttl, edited: m.edited, deleted: m.deleted, burned: m.burned, read: m.read };
-		if (m.type === 'me') addMsg(m.text, true, m.msgType || 'text', m.timestamp, meta);
-		else if (m.type === 'system') addSystemMsg(m.text, true, m.timestamp);
-		else addOtherMsg(m.text, m.userName, m.avatar, true, m.msgType || 'text', m.timestamp, meta)
-	})
+	bulkRenderDepth++;
+	try {
+		roomsData[activeRoomIndex].messages.forEach(m => {
+			const meta = { id: m.id, reactions: m.reactions, mentions: m.mentions, mentionsMe: m.mentionsMe, quote: m.quote, ttl: m.ttl, edited: m.edited, deleted: m.deleted, burned: m.burned, read: m.read };
+			if (m.type === 'me') addMsg(m.text, true, m.msgType || 'text', m.timestamp, meta);
+			else if (m.type === 'system') addSystemMsg(m.text, true, m.timestamp);
+			else addOtherMsg(m.text, m.userName, m.avatar, true, m.msgType || 'text', m.timestamp, meta)
+		})
+	} finally {
+		bulkRenderDepth--;
+	}
+	// #15: the single scroll write for the whole replay.
+	chatArea.scrollTop = chatArea.scrollHeight;
 }
 
 // Add a message to the chat area
@@ -111,12 +138,12 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 	// P1-B: tombstone rendering for recalled / burned entries
 	const safeMidEarly = (meta && meta.id && /^[A-Za-z0-9]{8,32}$/.test(meta.id)) ? meta.id : null;
 	if (safeMidEarly && meta && (meta.deleted || meta.burned)) {
-		const tomb = createElement('div', {
+		const tomb = createElementHTML('div', {
 			class: className + ' recalled',
 			'data-mid': safeMidEarly
 		}, `<span class="bubble-content"><span class="msg-recalled">${escapeHTML(t(meta.burned ? 'ui.burned' : 'ui.recalled', meta.burned ? 'Message expired' : 'Message recalled'))}</span></span><span class="bubble-meta">${time}</span>`);
 		chatArea.appendChild(tomb);
-		chatArea.scrollTop = chatArea.scrollHeight;
+		scrollChatToBottom(chatArea);
 		return
 	}
 	// P1-B: reply-quote block (both fields remote-controlled → escaped)
@@ -129,7 +156,7 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 			// New multi-image format: {text: "", images: ["data:image...", "data:image..."]}
 			const messageText = text.text ? textToHTML(text.text) : '';
 			const imageElements = text.images.map(imgData => {
-				const safeImgSrc = escapeHTML(imgData).replace(/javascript:/gi, '');
+				const safeImgSrc = escapeHTML(sanitizeImageSrc(imgData));
 				return `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
 			}).join('');
 					if (messageText && imageElements) {
@@ -147,7 +174,7 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 			}
 		} else if (typeof text === 'object' && text.image) {
 			// Legacy single image format: {text: "", image: "data:image..."}
-			const safeImgSrc = escapeHTML(text.image).replace(/javascript:/gi, '');
+			const safeImgSrc = escapeHTML(sanitizeImageSrc(text.image));
 			const messageText = text.text ? textToHTML(text.text) : '';
 			
 			if (messageText) {
@@ -162,7 +189,7 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 			}
 		} else {
 			// Legacy format: plain image data URL
-			const safeImgSrc = escapeHTML(text).replace(/javascript:/gi, '');
+			const safeImgSrc = escapeHTML(sanitizeImageSrc(text));
 			contentHtml = `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
 		}
 	} else if (msgType === 'file' || msgType === 'file_private') {
@@ -193,7 +220,7 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 	const readChipHtml = (meta && meta.read)
 		? `<span class="msg-read">✓✓</span>`
 		: (safeMid ? `<span class="msg-read" hidden>✓✓</span>` : '');
-	const div = createElement('div', {
+	const div = createElementHTML('div', {
 		class: className,
 		...(safeMid ? { 'data-mid': safeMid } : {})
 	}, `<span class="bubble-content">${quoteHtml}${contentHtml}${editedMark}</span>${actionsHtml}<span class="bubble-meta">${burnMark}${time}${readChipHtml}</span>`);
@@ -201,11 +228,11 @@ export function addMsg(text, isHistory = false, msgType = 'text', timestamp = nu
 	if (safeMid) renderReactions(safeMid);
 	const rdBurn = roomsData[activeRoomIndex];
 	if (safeMid && meta && meta.ttl && rdBurn) armBurnTimer(rdBurn, safeMid, meta.ttl, ts);
-	chatArea.scrollTop = chatArea.scrollHeight
+	scrollChatToBottom(chatArea)
 }
 // Add a message from another user to the chat area
 // 添加来自其他用户的消息到聊天区域
-export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, msgType = 'text', timestamp = null, meta = null) {
+export function addOtherMsg(msg, userName = '', _avatar = '', isHistory = false, msgType = 'text', timestamp = null, meta = null) {
 	if (!userName && activeRoomIndex >= 0) {
 		const rd = roomsData[activeRoomIndex];
 		// 优先使用文件消息自带的 userName 字段
@@ -228,7 +255,7 @@ export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, 
 			// New multi-image format: {text: "", images: ["data:image...", "data:image..."]}
 			const messageText = msg.text ? textToHTML(msg.text) : '';
 			const imageElements = msg.images.map(imgData => {
-				const safeImgSrc = escapeHTML(imgData).replace(/javascript:/gi, '');
+				const safeImgSrc = escapeHTML(sanitizeImageSrc(imgData));
 				return `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
 			}).join('');
 					if (messageText && imageElements) {
@@ -246,7 +273,7 @@ export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, 
 			}
 		} else if (typeof msg === 'object' && msg.image) {
 			// Legacy single image format: {text: "", image: "data:image..."}
-			const safeImgSrc = escapeHTML(msg.image).replace(/javascript:/gi, '');
+			const safeImgSrc = escapeHTML(sanitizeImageSrc(msg.image));
 			const messageText = msg.text ? textToHTML(msg.text) : '';
 			
 			if (messageText) {
@@ -261,7 +288,7 @@ export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, 
 			}
 		} else {
 			// Legacy format: plain image data URL
-			const safeImgSrc = escapeHTML(msg).replace(/javascript:/gi, '');
+			const safeImgSrc = escapeHTML(sanitizeImageSrc(msg));
 			contentHtml = `<img src="${safeImgSrc}" alt="image" class="bubble-img">`;
 		}
 	} else if (msgType === 'file' || msgType === 'file_private') {
@@ -292,7 +319,7 @@ export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, 
 			tombAvatar.innerHTML = cleanSvg
 		}
 		chatArea.appendChild(tombWrap);
-		chatArea.scrollTop = chatArea.scrollHeight;
+		scrollChatToBottom(chatArea);
 		return
 	}
 	// P1-B: reply-quote block (both fields remote-controlled → escaped)
@@ -322,7 +349,7 @@ export function addOtherMsg(msg, userName = '', avatar = '', isHistory = false, 
 	}
 	chatArea.appendChild(bubbleWrap);
 	if (safeMid) renderReactions(safeMid);
-	chatArea.scrollTop = chatArea.scrollHeight
+	scrollChatToBottom(chatArea)
 }
 
 // Add a system message to the chat area
@@ -339,11 +366,11 @@ export function addSystemMsg(text, isHistory = false, timestamp = null) {
 	const chatArea = $id('chat-area');
 	if (!chatArea) return;
 	const safeText = textToHTML(text);
-	const div = createElement('div', {
+	const div = createElementHTML('div', {
 		class: 'bubble system'
 	}, `<span class="bubble-content">${safeText}</span>`);
 	chatArea.appendChild(div);
-	chatArea.scrollTop = chatArea.scrollHeight
+	scrollChatToBottom(chatArea)
 }
 
 // Update the style of the chat input area
@@ -368,9 +395,7 @@ export function updateChatInputStyle() {
 	// Hook is set by main.js (avoids a chat.js → call-manager import cycle).
 	// v1.5.0 #16：通话按钮仅在有私聊对象时可见。钩子由 main.js 设置
 	//（避免 chat.js → 通话管理器的导入环）。
-	if (window.__jmltUpdateCallBtn) {
-		try { window.__jmltUpdateCallBtn() } catch (_e) { /* best-effort */ }
-	}
+	try { callBridge('updateCallBtn') } catch (_e) { /* best-effort */ }
 }
 
 // Setup image preview functionality
@@ -387,9 +412,9 @@ export function setupImagePreview() {
 // Show the image modal
 // 显示图片模态框
 export function showImageModal(src) {
-	const modal = createElement('div', {
+	const modal = createElementHTML('div', {
 		class: 'img-modal-bg'
-	}, `<div class="img-modal-blur"></div><div class="img-modal-content img-modal-content-overflow"><img src="${src}"class="img-modal-img"/><span class="img-modal-close">&times;</span></div>`);
+	}, `<div class="img-modal-blur"></div><div class="img-modal-content img-modal-content-overflow"><img src="${escapeHTML(sanitizeImageSrc(src))}"class="img-modal-img"/><span class="img-modal-close">&times;</span></div>`);
 	document.body.appendChild(modal);
 	on($('.img-modal-close', modal), 'click', () => modal.remove());
 	on(modal, 'click', (e) => {
@@ -407,7 +432,6 @@ export function showImageModal(src) {
 	};
 	on(img, 'wheel', function(ev) {
 		ev.preventDefault();
-		const prevScale = scale;
 		scale += ev.deltaY < 0 ? 0.1 : -0.1;
 		scale = Math.max(0.2, Math.min(5, scale));
 		if (scale === 1) {
@@ -471,7 +495,6 @@ function renderFileMessage(fileData, isSender) {
 		fileId,
 		fileName,
 		originalSize,
-		totalVolumes,
 		fileCount,
 		isArchive
 	} = fileData;
@@ -517,6 +540,12 @@ function renderFileMessage(fileData, isSender) {
 		} else if (transfer.status === 'completed') {
 			// 完成时不显示任何状态，只显示下载按钮
 			downloadBtnStyle = isSender ? 'display: none;' : 'display: flex;';
+		} else if (transfer.status === 'released') {
+			// #26: data was released to free memory — say so explicitly
+			// instead of letting preview/download fail silently.
+			statusText = t('file.released', 'Released to free memory — ask the sender to re-send to view or save it again.');
+			showProgress = true;
+			downloadBtnStyle = 'display: none;';
 		}	} else if (isSender) {
 		// 发送方历史消息，不显示状态和下载按钮
 		downloadBtnStyle = 'display: none;';
@@ -541,6 +570,7 @@ function renderFileMessage(fileData, isSender) {
 					<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><g stroke-width="0"></g><g stroke-linecap="round" stroke-linejoin="round"></g><g> <path fill-rule="evenodd" clip-rule="evenodd" d="M8 10C8 7.79086 9.79086 6 12 6C14.2091 6 16 7.79086 16 10V11H17C18.933 11 20.5 12.567 20.5 14.5C20.5 16.433 18.933 18 17 18H16.9C16.3477 18 15.9 18.4477 15.9 19C15.9 19.5523 16.3477 20 16.9 20H17C20.0376 20 22.5 17.5376 22.5 14.5C22.5 11.7793 20.5245 9.51997 17.9296 9.07824C17.4862 6.20213 15.0003 4 12 4C8.99974 4 6.51381 6.20213 6.07036 9.07824C3.47551 9.51997 1.5 11.7793 1.5 14.5C1.5 17.5376 3.96243 20 7 20H7.1C7.65228 20 8.1 19.5523 8.1 19C8.1 18.4477 7.65228 18 7.1 18H7C5.067 18 3.5 16.433 3.5 14.5C3.5 12.567 5.067 11 7 11H8V10ZM13 11C13 10.4477 12.5523 10 12 10C11.4477 10 11 10.4477 11 11V16.5858L9.70711 15.2929C9.31658 14.9024 8.68342 14.9024 8.29289 15.2929C7.90237 15.6834 7.90237 16.3166 8.29289 16.7071L11.2929 19.7071C11.6834 20.0976 12.3166 20.0976 12.7071 19.7071L15.7071 16.7071C16.0976 16.3166 16.0976 15.6834 15.7071 15.2929C15.3166 14.9024 14.6834 14.9024 14.2929 15.2929L13 16.5858V11Z" fill="currentColor"></path> </g></svg>
 				</button>
 			</div>
+			${(!isSender && transfer && transfer.status === 'completed') ? `<button class="file-release-btn" type="button">${escapeHTML(t('file.release', 'Release'))}</button>` : ''}
 			${showProgress ? `<div class="file-progress-container">
 				<div class="file-progress-bar">
 					<div class="file-progress" style="width: ${progressWidth}"></div>
@@ -831,47 +861,8 @@ export function updateTypingIndicator(usernames) {
 	el.innerHTML = `<span class="typing-dots"><i></i><i></i><i></i></span><span class="typing-names">${names}${more}</span> ${t('ui.typing', 'is typing…')}`
 }
 
-// ==================== P2: per-room local drafts ====================
-// 本地草稿。SECURITY/RULES.md 对照：
-// - 只存用户自己输入的消息文本，绝不存密码/密钥素材（不变量 4）
-// - 用 sessionStorage：作用域仅当前标签页会话，关标签即焚
-// - key 用频道哈希（sha256 hex，客户端自算），房间名不上存储
-function draftKey(channelHash) {
-	const safe = String(channelHash || '');
-	return /^[0-9a-f]{64}$/.test(safe) ? 'jmlt_draft:' + safe : null
-}
-
-function isBlankHtml(html) {
-	return !html || html.replace(/<br\s*\/?>/gi, '').replace(/&nbsp;/g, '').replace(/\u200B/g, '').trim() === ''
-}
-
-export function saveDraft(channelHash, html) {
-	const key = draftKey(channelHash);
-	if (!key) return;
-	try {
-		if (isBlankHtml(html)) sessionStorage.removeItem(key);
-		else sessionStorage.setItem(key, html)
-	} catch (error) { /* storage unavailable — draft is best-effort */ }
-}
-
-export function loadDraft(channelHash) {
-	const key = draftKey(channelHash);
-	if (!key) return '';
-	try {
-		return sessionStorage.getItem(key) || ''
-	} catch (error) {
-		return ''
-	}
-}
-
-export function clearDraft(channelHash) {
-	const key = draftKey(channelHash);
-	if (!key) return;
-	try {
-		sessionStorage.removeItem(key)
-	} catch (error) { /* noop */ }
-}
-
+// Draft cluster lives in chat.draft.js — forwarded exports (item 48).
+export { saveDraft, loadDraft, clearDraft } from './chat.draft.js';
 // ==================== P1-B: reply / edit / recall / burn-after-timer ====================
 // 回复引用 / 编辑 / 撤回 / 定时焚毁。SECURITY/RULES.md 对照：
 // - 全部走既有 E2EE 内容层（'w' 信封内的 'edit'/'del' action），服务器盲转发、零改动
@@ -1148,340 +1139,12 @@ export function markMessageReadDom(mid) {
 	if (chip) chip.hidden = false
 }
 
-// ==================== v1.1.0: local history search ====================
-// 本地历史搜索。SECURITY：只在内存态 rd.messages 上扫描（本地历史加载后
-// 本就合并进该缓冲），零新增存储；焚毁/撤回条目 text 已置 null 天然不可搜。
-// 高亮用 DOM text-node 切分构建，不拼 innerHTML（不变量 5）。
-
-let searchDebounceTimer = null;
-
-export function setupSearchUI() {
-	const btn = document.querySelector('.chat-search-btn');
-	if (btn && btn.dataset.searchSetup !== '1') {
-		btn.dataset.searchSetup = '1';
-		on(btn, 'click', toggleSearchBar)
-	}
-	const main = document.querySelector('.main');
-	if (!main || document.getElementById('jmlt-search-wrap')) return;
-	const wrap = createElement('div', { id: 'jmlt-search-wrap', class: 'jmlt-search-wrap', style: 'display:none' });
-	wrap.innerHTML = [
-		'<div class="jmlt-search-bar">',
-		'<input type="text" id="jmlt-search-input" class="jmlt-search-input" placeholder="">',
-		'<button type="button" class="jmlt-search-close" id="jmlt-search-close">✕</button>',
-		'</div>',
-		'<div class="jmlt-search-results" id="jmlt-search-results"></div>'
-	].join('');
-	main.insertBefore(wrap, main.querySelector('.chat-area'));
-	const input = wrap.querySelector('#jmlt-search-input');
-	on(input, 'input', () => {
-		if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
-		searchDebounceTimer = setTimeout(runSearch, 250)
-	});
-	on(input, 'keydown', (e) => {
-		if (e.key === 'Escape') toggleSearchBar()
-	});
-	on(wrap.querySelector('#jmlt-search-close'), 'click', toggleSearchBar);
-}
-
-export function toggleSearchBar() {
-	const wrap = document.getElementById('jmlt-search-wrap');
-	if (!wrap) return;
-	const show = wrap.style.display === 'none';
-	wrap.style.display = show ? 'block' : 'none';
-	if (show) {
-		const input = wrap.querySelector('#jmlt-search-input');
-		input.placeholder = t('search.placeholder', 'Search in this room…');
-		input.focus();
-		runSearch()
-	} else {
-		wrap.querySelector('#jmlt-search-results').innerHTML = ''
-	}
-}
-
-function runSearch() {
-	const wrap = document.getElementById('jmlt-search-wrap');
-	if (!wrap || wrap.style.display === 'none') return;
-	const input = wrap.querySelector('#jmlt-search-input');
-	const results = wrap.querySelector('#jmlt-search-results');
-	const q = (input.value || '').trim().toLowerCase();
-	results.innerHTML = '';
-	const rd = roomsData[activeRoomIndex];
-	if (!rd) return;
-	if (!q) {
-		results.appendChild(createElement('div', { class: 'jmlt-search-hint' },
-			t('search.hint', 'Type to search messages in this room')));
-		return
-	}
-	const hits = [];
-	for (let i = rd.messages.length - 1; i >= 0 && hits.length < 50; i--) {
-		const m = rd.messages[i];
-		if (!m || m.type === 'system' || m.burned || m.deleted) continue;
-		if (typeof m.text !== 'string' || !m.text.toLowerCase().includes(q)) continue;
-		hits.push(m)
-	}
-	if (hits.length === 0) {
-		results.appendChild(createElement('div', { class: 'jmlt-search-hint' },
-			t('search.no_results', 'No results')));
-		return
-	}
-	for (const m of hits) {
-		const row = createElement('div', { class: 'jmlt-search-row', 'data-mid': m.id || '' });
-		const meta = createElement('div', { class: 'jmlt-search-row-meta' });
-		const ts = m.timestamp ? new Date(m.timestamp) : null;
-		meta.textContent = (ts ? ts.toLocaleString() : '') + ' · ' + (m.type === 'me' ? (rd.myUserName || '') : (m.userName || ''));
-		// snippet with safe <mark> via DOM construction (no innerHTML concatenation)
-		const snip = createElement('div', { class: 'jmlt-search-row-snip' });
-		const lower = m.text.toLowerCase();
-		let pos = 0;
-		for (;;) {
-			const at = lower.indexOf(q, pos);
-			if (at === -1) {
-				snip.appendChild(document.createTextNode(m.text.slice(pos)));
-				break
-			}
-			snip.appendChild(document.createTextNode(m.text.slice(pos, at)));
-			const mark = document.createElement('mark');
-			mark.textContent = m.text.slice(at, at + q.length);
-			snip.appendChild(mark);
-			pos = at + q.length
-		}
-		row.appendChild(meta);
-		row.appendChild(snip);
-		on(row, 'click', () => jumpToMessage(m.id));
-		results.appendChild(row)
-	}
-}
-
-function jumpToMessage(mid) {
-	if (!mid) return;
-	const el = document.querySelector('#chat-area [data-mid="' + mid + '"]');
-	if (!el) {
-		addSystemMsg(t('search.not_loaded', 'This message is not in the current view (older than loaded history).'), true);
-		return
-	}
-	el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-	addClass(el, 'search-hit');
-	setTimeout(() => removeClass(el, 'search-hit'), 1500)
-}
-
-// ==================== v1.1.0: multi-select forward / copy ====================
-// 多选转发/复制。SECURITY：转发 = 把选中文本作为新消息经目标房间的
-// sendChannelMessage **重新加密**发送（不复用原信封——不同房间密钥不同）；
-// 私聊消息禁止跨房转发（作用域守卫，延续 P1-B 模式）。
-
-const selectedForAction = new Set();
-let selectMode = false;
-let longPressTimer = null;
-
-function isPrivateMsgType(msgType) {
-	return typeof msgType === 'string' && msgType.indexOf('_private') !== -1
-}
-
-export function exitSelectMode() {
-	if (!selectMode) return;
-	selectMode = false;
-	selectedForAction.clear();
-	const area = $id('chat-area');
-	if (area) {
-		removeClass(area, 'selecting');
-		const els = area.querySelectorAll('.selected');
-		for (const el of els) removeClass(el, 'selected')
-	}
-	const bar = document.getElementById('jmlt-select-bar');
-	if (bar) bar.remove()
-}
-
-function enterSelectMode(firstMid) {
-	if (selectMode) return;
-	selectMode = true;
-	const area = $id('chat-area');
-	if (area) addClass(area, 'selecting');
-	const rd = roomsData[activeRoomIndex];
-	if (rd && firstMid) toggleSelect(firstMid);
-	else renderSelectBar()
-}
-
-function toggleSelect(mid) {
-	if (!mid) return;
-	if (selectedForAction.has(mid)) {
-		selectedForAction.delete(mid)
-	} else {
-		selectedForAction.add(mid)
-	}
-	const el = document.querySelector('#chat-area [data-mid="' + mid + '"]');
-	if (el) {
-		if (selectedForAction.has(mid)) addClass(el, 'selected');
-		else removeClass(el, 'selected')
-	}
-	renderSelectBar()
-}
-
-function renderSelectBar() {
-	let bar = document.getElementById('jmlt-select-bar');
-	if (!selectMode) {
-		if (bar) bar.remove();
-		return
-	}
-	if (!bar) {
-		bar = createElement('div', { id: 'jmlt-select-bar', class: 'jmlt-select-bar' }, [
-			'<span class="jmlt-sel-count"></span>',
-			'<button type="button" class="jmlt-sel-copy"></button>',
-			'<button type="button" class="jmlt-sel-forward"></button>',
-			'<button type="button" class="jmlt-sel-cancel"></button>'
-		].join(''));
-		document.body.appendChild(bar);
-		on(bar.querySelector('.jmlt-sel-copy'), 'click', doCopySelected);
-		on(bar.querySelector('.jmlt-sel-forward'), 'click', doForwardSelected);
-		on(bar.querySelector('.jmlt-sel-cancel'), 'click', exitSelectMode);
-		ensureSelectBarText()
-	}
-	const countEl = bar.querySelector('.jmlt-sel-count');
-	const n = selectedForAction.size;
-	countEl.textContent = t('search.selected_count', 'Selected: {n}').replace('{n}', String(n));
-	bar.querySelector('.jmlt-sel-copy').disabled = n === 0;
-	bar.querySelector('.jmlt-sel-forward').disabled = n === 0
-}
-
-function ensureSelectBarText() {
-	const bar = document.getElementById('jmlt-select-bar');
-	if (!bar) return;
-	bar.querySelector('.jmlt-sel-copy').textContent = t('search.copy', 'Copy');
-	bar.querySelector('.jmlt-sel-forward').textContent = t('search.forward', 'Forward');
-	bar.querySelector('.jmlt-sel-cancel').textContent = t('ui.cancel', 'Cancel');
-}
-
-function collectSelectedTexts() {
-	const rd = roomsData[activeRoomIndex];
-	if (!rd) return [];
-	const out = [];
-	for (const mid of selectedForAction) {
-		const e = findMessageById(rd, mid);
-		if (!e || e.burned || e.deleted) continue;
-		if (typeof e.text !== 'string' || e.text.length === 0) continue;
-		out.push(e)
-	}
-	return out
-}
-
-async function doCopySelected() {
-	const entries = collectSelectedTexts();
-	if (entries.length === 0) return;
-	const rd = roomsData[activeRoomIndex];
-	const lines = entries.map((e) => {
-		const who = e.type === 'me' ? (rd.myUserName || '') : (e.userName || '');
-		const ts = e.timestamp ? new Date(e.timestamp).toLocaleString() : '';
-		return '[' + ts + '] ' + who + ': ' + e.text
-	});
-	try {
-		await navigator.clipboard.writeText(lines.join('\n'));
-		exitSelectMode()
-	} catch (_e) {
-		addSystemMsg(t('search.copy_failed', 'Clipboard unavailable'), true)
-	}
-}
-
-function doForwardSelected() {
-	const entries = collectSelectedTexts();
-	if (entries.length === 0) return;
-	// scope guard: private messages never leave their room
-	// 作用域守卫：私聊消息禁止跨房转发
-	const forwardable = entries.filter((e) => !isPrivateMsgType(e.msgType));
-	const skipped = entries.length - forwardable.length;
-	if (forwardable.length === 0) {
-		addSystemMsg(t('search.forward_private_blocked', 'Private messages cannot be forwarded to other rooms.'), true);
-		return
-	}
-	const targets = [];
-	for (let i = 0; i < roomsData.length; i++) {
-		const r = roomsData[i];
-		if (i !== activeRoomIndex && r && r.chat && r.roomName) targets.push({ idx: i, name: r.roomName })
-	}
-	if (targets.length === 0) {
-		addSystemMsg(t('search.no_other_rooms', 'Open another room first to forward messages.'), true);
-		return
-	}
-	const modal = createElement('div', { class: 'file-upload-modal show' }, [
-		'<div class="file-upload-overlay"></div>',
-		'<div class="file-upload-container">',
-		'<div class="file-upload-header"><h3>' + escapeHTML(t('search.forward_to', 'Forward to…')) + '</h3><button class="file-upload-close jmlt-fwd-close">&times;</button></div>',
-		'<div class="file-upload-content"><div class="jmlt-fwd-list"></div></div>',
-		'</div>',
-		'</div>'
-	].join(''));
-	document.body.appendChild(modal);
-	const list = modal.querySelector('.jmlt-fwd-list');
-	const close = () => { if (modal.parentNode) modal.parentNode.removeChild(modal) };
-	on(modal.querySelector('.file-upload-overlay'), 'click', close);
-	on(modal.querySelector('.jmlt-fwd-close'), 'click', close);
-	for (const tgt of targets) {
-		const row = createElement('button', { type: 'button', class: 'jmlt-fwd-room' });
-		row.textContent = '#' + tgt.name;
-		on(row, 'click', () => {
-			close();
-			const targetRd = roomsData[tgt.idx];
-			let sent = 0;
-			for (const e of forwardable) {
-				try {
-					const mid = targetRd.chat.sendChannelMessage('text', e.text);
-					if (mid) {
-						sent++;
-						targetRd.messages.push({
-							type: 'me',
-							text: e.text,
-							msgType: 'text',
-							timestamp: Date.now(),
-							id: mid,
-							reactions: null,
-							mentions: null,
-							mentionsMe: false
-						})
-					}
-				} catch (_err) { /* per-entry best-effort */ }
-			}
-			exitSelectMode();
-			const note = t('search.forwarded', 'Forwarded {n} message(s) to #{room}').replace('{n}', String(sent)).replace('{room}', tgt.name);
-			const extra = skipped > 0
-				? ' (' + t('search.private_skipped', '{n} private message(s) skipped').replace('{n}', String(skipped)) + ')'
-				: '';
-			addSystemMsg(note + extra, true)
-		});
-		list.appendChild(row)
-	}
-	ensureSelectBarText()
-}
-
-// wire up: right-click (desktop) / long-press (touch) on a bubble enters select mode
-export function setupSelectModeUI() {
-	const area = $id('chat-area');
-	if (!area || area.dataset.selSetup === '1') return;
-	area.dataset.selSetup = '1';
-	on(area, 'contextmenu', (e) => {
-		const bubble = e.target.closest('[data-mid]');
-		if (!bubble || bubble.classList.contains('recalled')) return;
-		e.preventDefault();
-		enterSelectMode(bubble.getAttribute('data-mid'))
-	});
-	on(area, 'click', (e) => {
-		if (!selectMode) return;
-		const bubble = e.target.closest('[data-mid]');
-		if (!bubble || bubble.classList.contains('recalled')) return;
-		e.preventDefault();
-		e.stopPropagation();
-		toggleSelect(bubble.getAttribute('data-mid'))
-	}, true);
-	// long-press for touch
-	on(area, 'touchstart', (e) => {
-		if (!e.touches || e.touches.length !== 1) return;
-		const bubble = e.target.closest('[data-mid]');
-		if (!bubble || bubble.classList.contains('recalled')) return;
-		longPressTimer = setTimeout(() => {
-			enterSelectMode(bubble.getAttribute('data-mid'));
-			longPressTimer = null
-		}, 600)
-	}, { passive: true });
-	const cancel = () => { if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null } };
-	on(area, 'touchend', cancel);
-	on(area, 'touchmove', cancel);
-	on(area, 'touchcancel', cancel);
-	ensureSelectBarText()
-}
+// Search cluster lives in chat.search.js — forwarded exports (item 48).
+export { setupSearchUI, toggleSearchBar } from './chat.search.js';
+import { setSearchNotifier } from './chat.search.js';
+setSearchNotifier((text, isHistory) => addSystemMsg(text, isHistory));
+// Select cluster lives in chat.select.js — forwarded exports (item 48).
+// exitSelectMode is also imported back: renderChatArea() calls it.
+import { exitSelectMode, setSelectNotifier } from './chat.select.js';
+export { exitSelectMode, setupSelectModeUI } from './chat.select.js';
+setSelectNotifier((text, isHistory) => addSystemMsg(text, isHistory));

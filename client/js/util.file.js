@@ -1,9 +1,10 @@
 // Import necessary modules
 // 导入必要的模块
-import { deflate, inflate, Deflate } from 'fflate';
+import { inflate, Deflate } from 'fflate';
 import { showFileUploadModal } from './util.fileUpload.js';
 import { imageFileToCleanFile } from './util.image.js';
 import { t } from './util.i18n.js';
+import { callBridge, hasBridge } from './util.bridge.js';
 // v1.2.0 #17: resume-request validation
 import { sanitizeResumeRequest } from './util.validate.js';
 // v1.7.0 #19: incremental SHA-256 (streaming hash of large files without
@@ -19,6 +20,17 @@ import { sha256 } from 'js-sha256';
 // 上限 16MB base64 载荷——超限传输放弃续传（诚实上限，仅内存，不落盘）。
 const RESUME_RETENTION_MS = 5 * 60 * 1000;
 const RESUME_PAYLOAD_CAP = 16 * 1024 * 1024;
+
+// #26: receiver-side retention for COMPLETED transfers. Received volumes
+// used to live in window.fileTransfers forever (~341MB of base64 strings
+// for one 256MB file, never released until the tab died). Completed
+// transfers now expire after 30 minutes (or immediately via the manual
+// release entry); the UI then shows an explicit "released" state.
+// #26：接收端已完成传输的保留策略。接收分卷过去永久驻留
+// window.fileTransfers（一个 256MB 文件约 341MB base64 字符串，直到
+// 标签页被杀才释放）。已完成传输 30 分钟后过期（或经手动入口立即
+// 释放），UI 明确呈现「已释放」状态。
+export const RECEIVED_RETENTION_MS = 30 * 60 * 1000;
 
 // v1.7.0 #19: honest transfer size cap. Everything is memory-only (zero
 // server storage, RULES.md invariant 4), so the transfer pipeline must stay
@@ -268,16 +280,6 @@ async function compressFilesToArchive(files, volumeSize = DEFAULT_VOLUME_SIZE) {
 	}
 }
 
-// Helper function to read file as array buffer
-// 辅助函数：将文件读取为ArrayBuffer
-function readFileAsArrayBuffer(file) {
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onload = (e) => resolve(e.target.result);
-		reader.onerror = () => reject(reader.error);
-		reader.readAsArrayBuffer(file);
-	});
-}
 
 // Decompress volumes back to file
 // 将分卷解压回文件
@@ -380,7 +382,7 @@ async function decompressArchiveToFiles(volumes, fileManifest, archiveHash = nul
 						// Extract files from archive
 				let dataOffset = 0;
 				const extractedFiles = [];
-						for (const fileInfo of fileManifest) {
+						for (const _fileInfo of fileManifest) {
 					// Read file metadata: [name_length(4)][name][size(8)][data]
 					const nameLengthBytes = decompressed.slice(dataOffset, dataOffset + 4);
 					const nameLengthView = new DataView(nameLengthBytes.buffer);
@@ -429,9 +431,7 @@ async function decompressArchiveToFiles(volumes, fileManifest, archiveHash = nul
 // Setup file sending functionality
 // 设置文件发送功能
 export function setupFileSend({
-	inputSelector,
 	attachBtnSelector,
-	fileInputSelector,
 	onSend
 }) {
 	const attachBtn = document.querySelector(attachBtnSelector);
@@ -469,8 +469,8 @@ async function handleFilesUpload(files, onSend) {
 	// 服务器零存储意味着整次传输在两端都驻留内存；明确的天花板胜过崩掉的标签页。
 	const bad = validateTransferSizes(Array.from(files).map(f => f.size));
 	if (bad) {
-		if (window.addSystemMsg) {
-			window.addSystemMsg(t('file.too_large', 'Transfer too large — the limit is {limit} per send (everything stays in memory; the server stores nothing).').replace('{limit}', formatFileSize(MAX_TRANSFER_BYTES)), true)
+		if (hasBridge('addSystemMsg')) {
+			callBridge('addSystemMsg', t('file.too_large', 'Transfer too large — the limit is {limit} per send (everything stays in memory; the server stores nothing).').replace('{limit}', formatFileSize(MAX_TRANSFER_BYTES)), true)
 		}
 		return;
 	}
@@ -479,13 +479,12 @@ async function handleFilesUpload(files, onSend) {
 	
 	try {
 		// Show compression progress
-		let progressElement = null;
 		
-		function showProgress(message) {
+		function showProgress() {
 			// 删除系统提示
 		}
 		
-		function updateProgress(message) {
+		function updateProgress() {
 			// 删除系统提示
 		}
 		
@@ -544,7 +543,6 @@ async function handleFilesUpload(files, onSend) {
 			
 		} else {
 			// Multiple files upload - create archive
-			const totalSize = files.reduce((sum, file) => sum + file.size, 0);
 			showProgress();
 			
 			const { volumes, originalSize, compressedSize, archiveHash, fileCount, fileManifest } = await compressFilesToArchive(files);
@@ -588,8 +586,8 @@ async function handleFilesUpload(files, onSend) {
 		
 	} catch (error) {
 		console.error('File compression error:', error);
-		if (window.addSystemMsg) {
-			window.addSystemMsg(`Failed to compress files: ${error.message}`);
+		if (hasBridge('addSystemMsg')) {
+			callBridge('addSystemMsg', `Failed to compress files: ${error.message}`);
 		}
 	}
 }
@@ -656,9 +654,48 @@ async function sendVolumes(fileId, volumes, onSend, updateProgress, fileName) {
 	sendNextBatch();
 }
 
-// Update file progress in chat
-// 更新聊天中的文件进度
-function updateFileProgress(fileId) {
+// #12: progress rendering is throttled to at most one DOM pass per 100ms
+// per transfer. The old code ran a full-document querySelectorAll on EVERY
+// received volume (1024 volumes for a 256MB file = 1024 full scans).
+// Terminal states (completed / incomplete / released) always render
+// immediately. Element references are deliberately NOT cached: chat
+// re-renders rebuild the bubbles, so cached nodes would go stale — the
+// throttle removes the scan frequency instead of the scan itself.
+// #12：进度渲染按传输节流为每 100ms 最多一次 DOM 扫描。旧代码每收一卷
+// 做一次全文档 querySelectorAll（256MB 文件 1024 卷 = 1024 次全扫描）。
+// 终态（completed/incomplete/released）始终立即渲染。不缓存元素引用：
+// 聊天重渲染会重建气泡，缓存节点会失效——节流降的是扫描频率。
+const PROGRESS_THROTTLE_MS = 100;
+const progressThrottle = new Map(); // fileId -> { last: number, timer: any }
+export function updateFileProgress(fileId) {
+	const transfer = window.fileTransfers.get(fileId);
+	if (!transfer) return;
+	const terminal = transfer.status === 'completed' || transfer.status === 'incomplete' || transfer.status === 'released';
+	const now = Date.now();
+	const slot = progressThrottle.get(fileId);
+	if (terminal) {
+		if (slot && slot.timer) clearTimeout(slot.timer);
+		progressThrottle.delete(fileId);
+		renderFileProgress(fileId);
+		return;
+	}
+	if (slot && (now - slot.last) < PROGRESS_THROTTLE_MS) {
+		if (!slot.timer) {
+			slot.timer = setTimeout(() => {
+				slot.timer = null;
+				slot.last = Date.now();
+				renderFileProgress(fileId);
+			}, PROGRESS_THROTTLE_MS - (now - slot.last));
+		}
+		return;
+	}
+	progressThrottle.set(fileId, { last: now, timer: null });
+	renderFileProgress(fileId);
+}
+
+// Update file progress in chat (immediate render; see throttle wrapper above)
+// 更新聊天中的文件进度（立即渲染；节流包装见上）
+function renderFileProgress(fileId) {
 	const transfer = window.fileTransfers.get(fileId);
 	if (!transfer) return;
 	const elements = document.querySelectorAll(`[data-file-id="${fileId}"]`);
@@ -693,6 +730,18 @@ function updateFileProgress(fileId) {
 			if (statusText) statusText.textContent = transfer.status === 'incomplete'
 				? t('file.waiting_resume', 'Waiting for re-send…')
 				: `Receiving ${transfer.receivedVolumes.size}/${transfer.totalVolumes}`;
+			if (downloadBtn) {
+				downloadBtn.classList.remove('show', 'animate-in');
+				downloadBtn.style.display = 'none';
+			}
+		} else if (transfer.status === 'released') {
+			// #26: explicit released state — never a silent dead button.
+			if (progressContainer) {
+				progressContainer.style.display = 'block';
+				progressContainer.classList.remove('fade-out');
+			}
+			if (progressBar) progressBar.style.width = '0%';
+			if (statusText) statusText.textContent = t('file.released', 'Released to free memory — ask the sender to re-send to view or save it again.');
 			if (downloadBtn) {
 				downloadBtn.classList.remove('show', 'animate-in');
 				downloadBtn.style.display = 'none';
@@ -737,7 +786,7 @@ function updateFileProgress(fileId) {
 // Handle incoming file messages
 // 处理接收到的文件消息
 export function handleFileMessage(message, isPrivate = false, roomIdx = null) {
-	const { type, fileId, userName } = message;
+	const { type } = message;
 
 	switch (type) {
 		case 'file_start':
@@ -820,11 +869,11 @@ function handleFileStart(message, isPrivate, roomIdx) {
 	// 只是拒收）。聊天条目照常渲染，并如实标注。
 	if ((typeof compressedSize === 'number' && compressedSize > MAX_TRANSFER_BYTES) ||
 		(typeof originalSize === 'number' && originalSize > MAX_TRANSFER_BYTES)) {
-		if (window.addSystemMsg) {
-			window.addSystemMsg(t('system.file_too_large_incoming', 'Refused "{name}": {size} exceeds this device\'s transfer limit ({limit}).').replace('{name}', fileName || '').replace('{size}', formatFileSize(Math.max(compressedSize || 0, originalSize || 0))).replace('{limit}', formatFileSize(MAX_TRANSFER_BYTES)), true)
+		if (hasBridge('addSystemMsg')) {
+			callBridge('addSystemMsg', t('system.file_too_large_incoming', 'Refused "{name}": {size} exceeds this device\'s transfer limit ({limit}).').replace('{name}', fileName || '').replace('{size}', formatFileSize(Math.max(compressedSize || 0, originalSize || 0))).replace('{limit}', formatFileSize(MAX_TRANSFER_BYTES)), true)
 		}
-		if (window.addOtherMsg) {
-			window.addOtherMsg({
+		if (hasBridge('addOtherMsg')) {
+			callBridge('addOtherMsg', {
 				type: 'file',
 				fileId,
 				fileName: isArchive ? `${fileCount} files` : fileName,
@@ -859,7 +908,7 @@ function handleFileStart(message, isPrivate, roomIdx) {
 	window.fileTransfers.set(fileId, fileTransfer);
 	
 	// 添加文件消息到聊天
-	if (window.addOtherMsg) {
+	if (hasBridge('addOtherMsg')) {
 		let displayData;
 		if (isArchive) {
 			displayData = {
@@ -883,7 +932,7 @@ function handleFileStart(message, isPrivate, roomIdx) {
 			};
 		}
 		
-		window.addOtherMsg(displayData, userName, userName, false, isPrivate ? 'file_private' : 'file');
+		callBridge('addOtherMsg', displayData, userName, userName, false, isPrivate ? 'file_private' : 'file');
 	}
 }
 
@@ -892,12 +941,12 @@ function handleFileStart(message, isPrivate, roomIdx) {
 function handleFileVolume(message) {
 	const { fileId, volumeIndex, volumeData } = message;
 	const transfer = window.fileTransfers.get(fileId);
-	
-	if (!transfer) return;
-	
+
+	if (!transfer || !transfer.volumeData) return; // #26: volumes already released
+
 	transfer.receivedVolumes.add(volumeIndex);
 	transfer.volumeData[volumeIndex] = volumeData;
-	
+
 	updateFileProgress(fileId);
 }
 
@@ -911,6 +960,10 @@ function handleFileComplete(message) {
 	// 检查是否所有分卷都已接收
 	if (transfer.receivedVolumes.size === transfer.totalVolumes) {
 		transfer.status = 'completed';
+		transfer.completedAt = Date.now();
+		// #26: arm the 30-minute retention expiry for received data.
+		if (transfer._releaseTimer) clearTimeout(transfer._releaseTimer);
+		transfer._releaseTimer = setTimeout(() => releaseTransferData(fileId), RECEIVED_RETENTION_MS);
 		updateFileProgress(fileId);
 		return
 	}
@@ -930,8 +983,8 @@ function handleFileComplete(message) {
 	}
 	const req = sanitizeResumeRequest(fileId, missing, transfer.totalVolumes);
 	if (!req) return;
-	if (window.addSystemMsg) {
-		window.addSystemMsg(t('system.resume_requested', 'Missing {n} part(s) of "{name}" — requesting re-send.').replace('{n}', String(missing.length)).replace('{name}', transfer.fileName || ''), true)
+	if (hasBridge('addSystemMsg')) {
+		callBridge('addSystemMsg', t('system.resume_requested', 'Missing {n} part(s) of "{name}" — requesting re-send.').replace('{n}', String(missing.length)).replace('{name}', transfer.fileName || ''), true)
 	}
 	routeFileMessage(transfer, {
 		type: 'file_resume_req',
@@ -945,10 +998,20 @@ function handleFileComplete(message) {
 // 从分卷下载文件
 export async function downloadFile(fileId) {
 	const transfer = window.fileTransfers.get(fileId);
-	if (!transfer || transfer.status !== 'completed') return;
+	if (!transfer) return;
+	// #26: released transfers explain themselves instead of failing silently.
+	if (transfer.status === 'released') {
+		window.addSystemMsg && window.addSystemMsg(t('file.released', 'Released to free memory — ask the sender to re-send to view or save it again.'), true);
+		return;
+	}
+	if (transfer.status !== 'completed') return;
 
 	try {
-		if (transfer.isArchive) {
+		if (!transfer.isArchive && transfer.blobCache) {
+			// #26: volumes were released after the first decode — save the
+			// cached Blob through the same capability chain.
+			await saveBlobAuto(transfer.blobCache, transfer.fileName);
+		} else if (transfer.isArchive) {
 			// Download archive as multiple files
 			await decompressArchiveToFiles(transfer.volumeData, transfer.fileManifest, transfer.archiveHash);
 			// 删除系统提示
@@ -959,11 +1022,11 @@ export async function downloadFile(fileId) {
 		}
 	} catch (error) {
 		console.error('Download error:', error);
-		window.addSystemMsg(`Failed to download: ${error.message}`);
+		callBridge('addSystemMsg', `Failed to download: ${error.message}`);
 	}
 }
 
-// ==================== v1.9.0: in-app preview + universal save ====================
+// ==================== v1.9.0: in-app preview + universal save =============}
 // Android WebView (the Tauri APK shell) cannot download blob: URLs at all —
 // wry sets no DownloadListener and DownloadManager cannot fetch in-memory
 // blobs. Received files therefore get an in-app preview overlay (tap the file
@@ -972,7 +1035,7 @@ export async function downloadFile(fileId) {
 //      files" on Android; also the ONLY path that works inside the APK shell
 //      if the WebView exposes it)
 //   2. <a download> anchor       -> real browsers / desktop WebView2
-// ==================== v1.9.0：应用内预览 + 通用保存 ====================
+// ==================== v1.9.0：应用内预览 + 通用保存 =============}
 // 安卓 WebView（Tauri APK 壳）完全无法下载 blob: URL——wry 没设置
 // DownloadListener，DownloadManager 也拿不到内存 blob。因此接收方可以点
 // 文件条目打开应用内预览浮层；保存走能力链：
@@ -999,6 +1062,23 @@ export function guessMime(name) {
 	return 'application/octet-stream';
 }
 
+// #26: release a completed transfer's data (volume originals + cached
+// Blob). The transfer entry stays so the UI can show the explicit
+// "released" state; the sender is NOT notified (re-getting the file means
+// asking for a re-send — there is no server copy, RULES invariant 4).
+// #26：释放已完成传输的数据（分卷原件 + 缓存 Blob）。传输条目保留，
+// 以便 UI 呈现明确的「已释放」状态；不通知发送方（重新获取 = 请对方
+// 重发——服务器没有任何副本，不变量 4）。
+export function releaseTransferData(fileId) {
+	const transfer = window.fileTransfers.get(fileId);
+	if (!transfer || transfer.status !== 'completed') return false;
+	if (transfer._releaseTimer) { clearTimeout(transfer._releaseTimer); transfer._releaseTimer = null; }
+	transfer.volumeData = null;
+	transfer.blobCache = null;
+	transfer.status = 'released';
+	updateFileProgress(fileId);
+	return true;
+}
 // Map a file to its in-app preview kind (upgrade #44). Pure function of the
 // name/MIME so it can be unit-tested; previewFile renders only from the local
 // decrypted Blob — no third-party online preview service, ever (RULES).
@@ -1015,10 +1095,15 @@ export function previewKindForFile(name, mime) {
 }
 
 // Decompress a completed single-file transfer into a Blob (hash-verified).
-// 将已完成的单文件传输解压为 Blob（带哈希校验）。
+// #26: the first successful decode is cached by fileId and the volume
+// originals are released right away — repeat previews/downloads used to
+// re-run the full decode→join→inflate→SHA-256 pipeline every time.
+// 将已完成的单文件传输解压为 Blob（带哈希校验）。#26：首次解出后按
+// fileId 缓存，并立即释放分卷原件——过去每次预览/下载都全量重解。
 export async function getTransferBlob(fileId) {
 	const transfer = window.fileTransfers.get(fileId);
 	if (!transfer || transfer.status !== 'completed') return null;
+	if (transfer.blobCache) return transfer.blobCache;
 	if (transfer.isArchive || !transfer.volumeData || !transfer.volumeData.length) return null;
 
 	const combined = transfer.volumeData.map((v) => base64ToArrayBuffer(v));
@@ -1038,7 +1123,12 @@ export async function getTransferBlob(fileId) {
 			throw new Error('File integrity check failed: hash mismatch');
 		}
 	}
-	return new Blob([decompressed], { type: guessMime(transfer.fileName) });
+	const blob = new Blob([decompressed], { type: guessMime(transfer.fileName) });
+	// #26: cache the Blob, release the base64 volume originals (the ~341MB
+	// string form of a 256MB file drops to a single Blob reference).
+	transfer.blobCache = blob;
+	transfer.volumeData = null;
+	return blob;
 }
 
 // Save a Blob through the capability chain. Resolves to the method used, or
@@ -1082,11 +1172,16 @@ export async function saveBlobAuto(blob, fileName) {
 export async function previewFile(fileId) {
 	const transfer = window.fileTransfers.get(fileId);
 	if (!transfer) return;
+	// #26: released transfers get the explicit released message.
+	if (transfer.status === 'released') {
+		window.addSystemMsg && window.addSystemMsg(t('file.released', 'Released to free memory — ask the sender to re-send to view or save it again.'), true);
+		return;
+	}
 	let overlay = null;
 	try {
 		const blob = await getTransferBlob(fileId);
 		if (!blob) {
-			window.addSystemMsg && window.addSystemMsg(t('file.preview_unavailable', 'Preview unavailable — the transfer is not complete or has no data.'), true);
+			callBridge('addSystemMsg', t('file.preview_unavailable', 'Preview unavailable — the transfer is not complete or has no data.'), true);
 			return;
 		}
 		const url = URL.createObjectURL(blob);
@@ -1160,16 +1255,16 @@ export async function previewFile(fileId) {
 			try {
 				const how = await saveBlobAuto(blob, transfer.fileName);
 				if (how === 'none') {
-					window.addSystemMsg && window.addSystemMsg(t('file.save_unsupported', 'This app environment cannot save files — long-press the preview image instead.'), true);
+					callBridge('addSystemMsg', t('file.save_unsupported', 'This app environment cannot save files — long-press the preview image instead.'), true);
 				}
 			} catch (err) {
-				window.addSystemMsg && window.addSystemMsg('Save failed: ' + (err && err.message || err), true);
+				callBridge('addSystemMsg', 'Save failed: ' + (err && err.message || err), true);
 			} finally {
 				saveBtn.disabled = false;
 			}
 		});
 	} catch (error) {
-		window.addSystemMsg && window.addSystemMsg('Preview failed: ' + (error && error.message || error), true);
+		callBridge('addSystemMsg', 'Preview failed: ' + (error && error.message || error), true);
 		if (overlay) overlay.remove();
 	}
 }
