@@ -652,9 +652,7 @@ function setupSettingsPanel() {
 		try {
 			const bytes = new Uint8Array(await file.arrayBuffer());
 			const data = await decryptMigration(bytes, key);
-			if (typeof window.__jmltOpenLoginPrefill === 'function') {
-				window.__jmltOpenLoginPrefill(data)
-			}
+			callBridge('openLoginPrefill', data);
 			window.addSystemMsg && window.addSystemMsg(t('settings.import_creds_done', 'Room credentials imported — review and press ENTER to join.'), true)
 		} catch (err) {
 			const expired = err && err.message === 'expired';

@@ -243,7 +243,7 @@ function fillLoginFormFields(prefix, data) {
 	if (p) { p.value = data.password || ''; p.readOnly = false; p.style.color = ''; p.style.background = ''; }
 	if (u && data.username) u.value = data.username;
 }
-window.__jmltOpenLoginPrefill = (data) => {
+function openLoginPrefill(data) {
 	if (!data || !data.roomName) return;
 	const loginContainer = $id('login-container');
 	const onLoginPage = !!(loginContainer && loginContainer.style.display !== 'none');
@@ -255,7 +255,8 @@ window.__jmltOpenLoginPrefill = (data) => {
 		openLoginModal();
 		fillLoginFormFields('-modal', data);
 	}
-};
+}
+registerBridge('openLoginPrefill', openLoginPrefill);
 
 // ==================== v1.5.0 #16: WebRTC call manager ====================
 // 通话管理器装在 main.js（信令回调经 room.js 的 window 钩子转发进来）。
@@ -324,7 +325,7 @@ window.addEventListener('DOMContentLoaded', () => {
 			const key = window.prompt(t('settings.import_creds_key', 'Migration key (to decrypt the credentials):') || '');
 			if (key) {
 				decryptMigration(bytes, key).then((data) => {
-					window.__jmltOpenLoginPrefill(data);
+					openLoginPrefill(data);
 					addSystemMsg(t('migration.prefilled', 'Room credentials imported from migration link — review and press ENTER to join.'), true)
 				}).catch((err) => {
 					const expired = err && err.message === 'expired';
