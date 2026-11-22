@@ -26,6 +26,10 @@ function isSharePayloadFresh(payload, now) {
 }
 
 // 预缓存：应用入口 + 清单 + 图标。JS/CSS 由运行时 SWR 策略补充。
+// 条目 14 核对（不变量 7）：懒加载 chunk（emoji-picker / qrcode，均为构建期
+// 静态 JS、无任何用户数据）不进 PRECACHE，但走下方 fetch 处理的同源静态
+// 资源 SWR 规则（.js 扩展名白名单）缓存——仍在「只缓存静态应用壳」边界内；
+// 首次打开对应功能时需联网加载一次，离线首开会走客户端的失败兜底提示。
 const PRECACHE = [
 	'./',
 	'./index.html',

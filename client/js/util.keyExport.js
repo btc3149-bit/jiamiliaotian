@@ -13,7 +13,8 @@
 //   防止「信任被复制」（不变量 3 的显式设计，不是偷懒）。
 // - 不变量 4 ✓（服务器无涉）、2 ✓（AES-GCM）、6 ✓（qrcode-generator 已审）。
 
-import qrcode from 'qrcode-generator';
+// Item 14: qrcode-generator is dynamic-imported inside showMigrationModal
+// (lazy chunk, only loaded when the migration modal opens).
 import { t } from './util.i18n.js';
 
 export const MIGRATION_MAGIC = 'JMLTK';       // 5-byte ASCII magic
@@ -180,7 +181,7 @@ export function parseMigrationText(text) {
 
 // ---- export modal (QR + copy + download) ----
 // 导出弹窗：二维码 + 复制链接 + 下载 .jmltk 文件。复用 share-modal 样式。
-export function showMigrationModal(bytes) {
+export async function showMigrationModal(bytes) {
 	const url = buildMigrationUrl(bytes);
 	const prev = document.querySelector('.share-modal-overlay');
 	if (prev) prev.remove();
@@ -188,6 +189,7 @@ export function showMigrationModal(bytes) {
 	overlay.className = 'share-modal-overlay';
 	let qrSvg = '';
 	try {
+		const { default: qrcode } = await import('qrcode-generator');
 		const qr = qrcode(0, 'M');
 		qr.addData(url);
 		qr.make();

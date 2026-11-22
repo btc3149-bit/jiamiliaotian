@@ -1258,13 +1258,13 @@ export async function previewFile(fileId) {
 					callBridge('addSystemMsg', t('file.save_unsupported', 'This app environment cannot save files — long-press the preview image instead.'), true);
 				}
 			} catch (err) {
-				callBridge('addSystemMsg', 'Save failed: ' + (err && err.message || err), true);
+				callBridge('addSystemMsg', t('file.save_failed', 'Save failed') + ': ' + (err && err.message || err), true);
 			} finally {
 				saveBtn.disabled = false;
 			}
 		});
 	} catch (error) {
-		callBridge('addSystemMsg', 'Preview failed: ' + (error && error.message || error), true);
+		callBridge('addSystemMsg', t('file.preview_failed', 'Preview failed') + ': ' + (error && error.message || error), true);
 		if (overlay) overlay.remove();
 	}
 }

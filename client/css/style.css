@@ -783,6 +783,13 @@ flex-direction: column;
 	padding-left: unset;
 	padding-right: unset;
 	transition: color 0.2s ease, background-color 0.2s ease, transform 0.2s ease;
+	position: relative;
+}
+/* Item 19: expanded touch target, visual size unchanged. */
+.chat-emoji-btn::after {
+	content: '';
+	position: absolute;
+	inset: -8px -4px;
 }
 
 .chat-emoji-btn:hover {
@@ -1916,6 +1923,13 @@ h2{
   cursor: pointer;
   opacity: .75;
   transition: opacity .15s ease, transform .15s ease;
+  position: relative;
+}
+/* Item 19: ~40px touch target, visual size unchanged. */
+.msg-react-btn::after {
+  content: '';
+  position: absolute;
+  inset: -10px -2px;
 }
 .msg-react-btn:hover {
   opacity: 1;
@@ -1944,6 +1958,13 @@ h2{
   cursor: pointer;
   user-select: none;
   transition: background .15s ease, border-color .15s ease;
+  position: relative;
+}
+/* Item 19: ~40px tall touch target, visual size unchanged. */
+.msg-reaction-chip::after {
+  content: '';
+  position: absolute;
+  inset: -11px 0;
 }
 .msg-reaction-chip:hover {
   background: var(--bg-hover, #e9ecef);
@@ -1974,6 +1995,22 @@ h2{
   border-radius: 10px;
   cursor: pointer;
   transition: transform .12s ease, background .12s ease;
+  position: relative;
+}
+/* Item 19: ~40px touch target, visual size unchanged. */
+.reaction-option::after {
+  content: '';
+  position: absolute;
+  inset: -6px -4px;
+}
+/* Item 20: full emoji picker floated for reactions */
+.reaction-full-picker {
+  position: fixed !important;
+  bottom: auto !important;
+  z-index: 1001;
+  display: block;
+  opacity: 1;
+  transform: none;
 }
 .reaction-option:hover {
   transform: scale(1.25);
@@ -2506,6 +2543,13 @@ html[data-mode="dark"] .share-qr-box {
 	border-radius: 8px;
 	color: #808080;
 	align-self: center;
+	position: relative;
+}
+/* Item 19: ~42px touch target, visual size unchanged. */
+.chat-burn-btn::after {
+	content: '';
+	position: absolute;
+	inset: -8px -6px;
 }
 .chat-burn-btn:hover {
 	background: rgba(0, 0, 0, .06);
@@ -2593,6 +2637,14 @@ html[data-mode="dark"] .msg-read {
 	border-radius: 8px;
 	color: #808080;
 	align-self: center;
+	position: relative;
+}
+/* Item 19: expand the touch target to ~40px via a pseudo-element without
+   changing the visual size. */
+.chat-search-btn::after {
+	content: '';
+	position: absolute;
+	inset: -8px -6px;
 }
 .chat-search-btn:hover {
 	background: rgba(0, 0, 0, .06);
@@ -2831,6 +2883,13 @@ html[data-mode="dark"] .jmlt-fwd-room:hover {
 	border-radius: 8px;
 	color: #808080;
 	align-self: center;
+	position: relative;
+}
+/* Item 19: ~40px touch target, visual size unchanged. */
+.chat-voice-btn::after {
+	content: '';
+	position: absolute;
+	inset: -8px -6px;
 }
 .chat-voice-btn:hover {
 	background: rgba(0, 0, 0, .06);

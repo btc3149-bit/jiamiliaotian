@@ -40,6 +40,9 @@ import {
 // v1.3.0 #8: whitelisted markdown rendering for text messages
 import { markdownToHtml } from './util.markdown.js';
 import { callBridge } from './util.bridge.js';
+// Item 20: full emoji picker for reactions (lazy) + single-grapheme validation
+import { createFullEmojiPicker, notifyEmojiLoadFailed } from './util.emoji.js';
+import { isValidReactionEmoji } from './util.validate.js';
 
 // v1.2.0 #9: render a validated voice payload as an inline audio player.
 // data: URL is escaped and javascript: stripped (same treatment as images).
@@ -648,7 +651,13 @@ export function setupInputPlaceholder() {
 // SECURITY: everything below travels inside the existing E2EE content layer.
 // The server only ever relays opaque ciphertext and is completely unchanged.
 
-// Whitelisted reaction emojis (rendered as text nodes, still escaped upstream)
+// Quick-pick reaction emojis shown first in the reaction picker; the full
+// emoji-picker-element set is one tap away via the picker's "more" button
+// (item 20). Any single grapheme cluster is a valid reaction — validated by
+// isValidReactionEmoji on send, on receive, and locally here; rendering
+// still goes through escapeHTML (see renderReactions).
+// 回应快捷表情（选框首行）；完整表情集经「更多」按钮打开已有 picker。
+// 任意单个 grapheme 簇均可作回应，三处校验，渲染仍走 escapeHTML。
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🎉'];
 
 // Resolve clientIds -> display names for mention highlighting
@@ -687,6 +696,7 @@ function findMessageById(rd, mid) {
 // 本地切换回应状态（不发网络请求）
 export function toggleReactionLocal(rd, mid, emoji, clientId) {
 	if (!rd || !mid || !emoji) return false;
+	if (!isValidReactionEmoji(emoji)) return false;
 	const msg = findMessageById(rd, mid);
 	if (!msg) return false;
 	if (!msg.reactions || typeof msg.reactions !== 'object') msg.reactions = {};
@@ -725,22 +735,90 @@ export function renderReactions(mid) {
 	row.innerHTML = html
 }
 
-// Floating emoji picker for reactions
-// 表情回应浮动选框
+// Floating emoji picker for reactions: quick-pick row + a "more" button
+// that opens the full emoji-picker-element (item 20, lazily loaded).
+// 表情回应浮动选框：快捷行 + 「更多」按钮打开完整选择器（懒加载）。
 function showReactionPicker(mid, anchorEl) {
 	hideReactionPicker();
 	const picker = createElement('div', { class: 'reaction-picker', 'data-mid': mid });
 	picker.innerHTML = REACTION_EMOJIS.map(e =>
 		`<button type="button" class="reaction-option" data-emoji="${escapeHTML(e)}">${escapeHTML(e)}</button>`
-	).join('');
+	).join('') + `<button type="button" class="reaction-option reaction-more" data-mid="${escapeHTML(mid)}" title="${escapeHTML(t('ui.more_emojis', 'More emojis'))}">➕</button>`;
 	document.body.appendChild(picker);
+	// The picker lives on document.body (outside #chat-area), so handle its
+	// clicks directly instead of relying on the chat-area delegation.
+	picker.addEventListener('click', (e) => {
+		const more = e.target.closest('.reaction-more');
+		if (more) {
+			e.stopPropagation();
+			showFullReactionPicker(mid, anchorEl);
+			return
+		}
+		const option = e.target.closest('.reaction-option');
+		if (!option) return;
+		e.stopPropagation();
+		const emoji = option.dataset.emoji || '';
+		hideReactionPicker();
+		const rd = roomsData[activeRoomIndex];
+		if (!rd || !rd.chat || !isValidReactionEmoji(emoji)) return;
+		if (rd.chat.sendReaction(mid, emoji)) {
+			toggleReactionLocal(rd, mid, emoji, rd.myId);
+			renderReactions(mid)
+		}
+	});
 	const rect = anchorEl.getBoundingClientRect();
-	const pw = 216, ph = 44;
+	const pw = 252, ph = 44;
 	picker.style.left = Math.max(8, Math.min(window.innerWidth - pw - 8, rect.left - pw / 2)) + 'px';
 	picker.style.top = Math.max(8, rect.top - ph - 8) + 'px';
 	setTimeout(() => {
 		on(document, 'click', hideReactionPickerOnOutside)
 	}, 0)
+}
+
+// Full emoji picker for reactions (reuses emoji-picker-element via
+// util.emoji.js; the pick is validated, sent over the E2EE reaction action,
+// and rendered through the existing escaped chip path).
+// 回应完整选择器：复用已有组件，选中后走既有校验/发送/转义渲染路径。
+async function showFullReactionPicker(mid, anchorEl) {
+	hideReactionPicker();
+	let picker;
+	try {
+		picker = await createFullEmojiPicker((unicode) => {
+			hideFullReactionPicker();
+			const rd = roomsData[activeRoomIndex];
+			if (!rd || !rd.chat || !isValidReactionEmoji(unicode)) return;
+			if (rd.chat.sendReaction(mid, unicode)) {
+				toggleReactionLocal(rd, mid, unicode, rd.myId);
+				renderReactions(mid)
+			}
+		});
+	} catch (error) {
+		console.error('Failed to load full emoji picker:', error);
+		notifyEmojiLoadFailed();
+		return
+	}
+	picker.classList.add('reaction-full-picker');
+	picker.style.display = 'block';
+	document.body.appendChild(picker);
+	const rect = anchorEl.getBoundingClientRect();
+	picker.style.left = Math.max(8, Math.min(window.innerWidth - 360, rect.left - 160)) + 'px';
+	picker.style.top = Math.max(8, rect.top - 360) + 'px';
+	setTimeout(() => {
+		on(document, 'click', hideFullReactionPickerOnOutside)
+	}, 0)
+}
+
+function hideFullReactionPickerOnOutside(e) {
+	const picker = document.querySelector('.reaction-full-picker');
+	if (!picker) return;
+	if (picker.contains(e.target)) return;
+	hideFullReactionPicker()
+}
+
+function hideFullReactionPicker() {
+	const picker = document.querySelector('.reaction-full-picker');
+	if (picker) picker.remove();
+	off(document, 'click', hideFullReactionPickerOnOutside)
 }
 
 function hideReactionPickerOnOutside(e) {

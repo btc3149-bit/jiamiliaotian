@@ -27,6 +27,7 @@ import {
 import {
 	t
 } from './util.i18n.js';
+import { isValidReactionEmoji } from './util.validate.js';
 window.Buffer = Buffer;
 
 // ===================== perf batch (upgrade/client-perf) =====================
@@ -1032,7 +1033,9 @@ class NodeCrypt {
 				// SECURITY: validate locally before sending; receivers re-validate.
 				const safeId = String(targetMessageId || '');
 				const safeEmoji = String(emoji || '');
-				if (!/^[A-Za-z0-9]{8,32}$/.test(safeId) || !safeEmoji || safeEmoji.length > 16) {
+				// Item 20: reactions are a single grapheme cluster (full
+				// picker range), hard-capped — see util.validate.js.
+				if (!/^[A-Za-z0-9]{8,32}$/.test(safeId) || !isValidReactionEmoji(safeEmoji)) {
 					return (false)
 				}
 				let payloads = {};
