@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "bufferutil": "^4.2.0",
-    "utf-8-validate": "^5.0.2",
+    "utf-8-validate": "^6.0.6",
     "ws": "^8.23.0"
   }
 }
