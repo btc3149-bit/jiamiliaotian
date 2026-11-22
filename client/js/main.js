@@ -8,7 +8,8 @@ import {
 	setupFileSend,
 	handleFileMessage,
 	downloadFile,
-	previewFile
+	previewFile,
+	releaseTransferData
 } from './util.file.js';
 
 // P2: 拖拽文件直投上传模态框 / Drop files straight into the upload modal
@@ -216,9 +217,28 @@ document.addEventListener('click', (e) => {
 	const fileId = wrap ? wrap.getAttribute('data-file-id') : '';
 	if (!fileId) return;
 	const transfer = window.fileTransfers && window.fileTransfers.get(fileId);
-	if (!transfer || transfer.isArchive || !transfer.volumeData || !transfer.volumeData.length) return;
+	// #26: after the first decode the volumes are released and only the
+	// cached Blob remains — that is still previewable. A 'released'
+	// transfer falls through to previewFile, which explains the state.
+	if (!transfer || transfer.isArchive) return;
+	if (transfer.status !== 'released' && !transfer.blobCache && (!transfer.volumeData || !transfer.volumeData.length)) return;
 	e.preventDefault();
 	previewFile(fileId);
+});
+
+// #26: manual release entry — frees a completed transfer's data on demand
+// (the automatic expiry is 30 minutes; this is the immediate version).
+document.addEventListener('click', (e) => {
+	const btn = e.target && e.target.closest ? e.target.closest('.file-release-btn') : null;
+	if (!btn) return;
+	const wrap = btn.closest('[data-file-id]');
+	const fileId = wrap ? wrap.getAttribute('data-file-id') : '';
+	if (!fileId) return;
+	e.preventDefault();
+	if (releaseTransferData(fileId)) {
+		// re-render the room so the bubble switches to the released state
+		if (window.__jmltRenderChat) window.__jmltRenderChat();
+	}
 });
 // v1.3.0 #6/#7: settings panel lives in util.settings.js which cannot import
 // the renderers without a cycle — expose hooks instead.
