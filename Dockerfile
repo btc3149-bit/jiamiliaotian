@@ -1,6 +1,6 @@
-# Use a Node.js 18 Alpine base image for the backend builder
-# 使用 Node.js 18 Alpine 基础镜像作为后端构建器
-FROM node:18-alpine AS backend-builder
+# Use a Node.js 22 Alpine base image for the backend builder
+# 使用 Node.js 22 Alpine 基础镜像作为后端构建器
+FROM node:22-alpine AS backend-builder
 
 WORKDIR /app
 
@@ -17,7 +17,7 @@ COPY server/server.js ./server/
 
 # Frontend build stage
 # 前端构建阶段
-FROM node:18-alpine AS frontend-builder
+FROM node:22-alpine AS frontend-builder
 
 WORKDIR /app
 
@@ -37,13 +37,16 @@ COPY client/ ./client/
 # 构建前端
 RUN npm run build:docker
 
-# Second stage: Minimal image
-# 第二阶段：极小镜像
-FROM alpine:3.16
+# Runtime stage: Node.js 22 Alpine as the runtime base (item 31).
+# Replaces the old plain-Alpine + `apk add nodejs` combination, whose
+# repository Node was 16.x (EOL, no more security updates).
+# 运行时阶段：以 node:22-alpine 为基座（第 31 条）。旧写法
+# 纯 Alpine + apk nodejs 实际跑的是 Node 16.x（已 EOL）。
+FROM node:22-alpine
 
-# Install minimal Node.js and Nginx
-# 安装最小化版本的 Node.js 和 Nginx
-RUN apk add --no-cache nodejs nginx && \
+# Install Nginx (Node.js itself comes with the base image)
+# 安装 Nginx（Node.js 已由基础镜像提供）
+RUN apk add --no-cache nginx && \
     mkdir -p /app/server /app/client /run/nginx && \
     # Clean up apk cache
     # 清理 apk 缓存
@@ -57,19 +60,24 @@ COPY --from=backend-builder /app/server/*.js /app/server/
 # 从前端构建阶段复制构建好的文件，而不是复制 dist 目录
 COPY --from=frontend-builder /app/dist/ /app/client/
 
+# Supervised entrypoint (item 32): if node or nginx dies, the container exits
+# 有监管的启动脚本（第 32 条）：任一进程崩溃，容器随之退出，不再假健康
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+
 # Optimized Nginx configuration
 # 优化的 Nginx 配置
 RUN cat > /etc/nginx/nginx.conf <<'EOF'
 worker_processes 1;
 worker_rlimit_nofile 512;
-events { 
-    worker_connections 128; 
+events {
+    worker_connections 128;
     multi_accept off;
 }
 http {
     include       mime.types;
     default_type  application/octet-stream;
-    
+
     # Optimization settings
     # 优化设置
     sendfile on;
@@ -79,7 +87,18 @@ http {
     types_hash_max_size 1024;
     client_max_body_size 1M;
     client_body_buffer_size 128k;
-    
+
+    # gzip compression (item 17): the Cloudflare path is compressed by the
+    # platform; the Docker path must compress itself or the first paint
+    # ships ~2.9x the bytes. Declared in the README dual-path table.
+    # gzip 压缩（第 17 条）：Cloudflare 路径由平台压缩，Docker 路径
+    # 须自行开启，否则首屏多传约 2.9 倍流量；差异已写入 README 双路径表。
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css application/json application/javascript text/javascript text/xml application/xml application/xml+rss image/svg+xml font/woff font/woff2;
+
     # Disable access logs to reduce I/O
     # 禁用访问日志以减少 I/O
     access_log off;
@@ -87,7 +106,7 @@ http {
       # Disable unnecessary features
     # 禁用不需要的功能
     server_tokens off;
-    
+
     # Map to handle WebSocket upgrade detection
     # 映射处理 WebSocket 升级检测
     map $http_upgrade $connection_upgrade {
@@ -107,7 +126,7 @@ http {
         add_header Referrer-Policy "no-referrer" always;
         add_header X-Frame-Options "DENY" always;
         add_header Permissions-Policy "camera=(self), microphone=(self), geolocation=()" always;
-        
+
         # Main location block - handles both HTTP and WebSocket
         # 主位置块 - 处理 HTTP 和 WebSocket
         location / {
@@ -117,7 +136,7 @@ http {
                 proxy_pass http://127.0.0.1:8088;
                 break;
             }
-            
+
             # For WebSocket requests, proxy to Node.js backend
             # 对于 WebSocket 请求，代理到 Node.js 后端
             proxy_http_version 1.1;
@@ -127,7 +146,7 @@ http {
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto $scheme;
-            
+
             # For regular HTTP requests, serve static files
             # 对于常规 HTTP 请求，提供静态文件
             root /app/client;
@@ -140,9 +159,12 @@ EOF
 
 EXPOSE 80
 
-# Set low memory environment variables and remove unsupported options
-# 设置低内存环境变量，去除不支持的选项
+# Liveness probe (item 32): hits the Node relay's /healthz directly.
+# The endpoint returns only "ok" — no business metadata (RULES 1/9).
+# 存活探针（第 32 条）：直查 Node 中继的 /healthz，该端点只回 "ok"。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1:8088/healthz || exit 1
 
-# Run in the foreground and combine commands to reduce the number of processes
-# 使用前台运行并合并命令减少进程数
-CMD ["sh", "-c", "node --expose-gc --unhandled-rejections=strict /app/server/server.js & nginx -g 'daemon off;'"]
+# Run under the supervised entrypoint (item 32)
+# 经有监管的启动脚本运行（第 32 条）
+CMD ["/app/docker-entrypoint.sh"]
