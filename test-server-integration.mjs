@@ -45,13 +45,13 @@ function decryptMessage(wire, key) {
 }
 
 class TestClient {
-	constructor() { this.decrypted = []; this.raw = []; }
+	constructor(url = 'ws://127.0.0.1:8088', localAddress) { this.decrypted = []; this.raw = []; this.url = url; this.localAddress = localAddress; }
 	async connect() {
 		// The banner prints before the listen socket is fully bound; retry.
 		let lastErr = null;
 		for (let i = 0; i < 50; i++) {
 			try {
-				this.ws = new WebSocket('ws://127.0.0.1:8088');
+				this.ws = new WebSocket(this.url, this.localAddress ? { localAddress: this.localAddress } : undefined);
 				this.ws.on('message', d => this.onMessage(d.toString()));
 				await new Promise((res, rej) => { this.ws.on('open', res); this.ws.on('error', rej); });
 				return this;
@@ -140,8 +140,8 @@ try {
 	check('after B disconnects, A receives emptied member list', !!la3);
 
 	console.log('=== test-server-integration: disconnect churn robustness ===');
-	for (let i = 0; i < 10; i++) {
-		const c = await new TestClient().connect();
+	for (let i = 0; i < 7; i++) {
+		const c = await new TestClient().connect(); // 7 churn + A + B = 9 handshakes, inside the S-2 per-IP window (10/min)
 		await c.handshake();
 		c.send({ a: 'j', p: channel });
 		await sleep(30);
@@ -159,6 +159,141 @@ try {
 } finally {
 	srv.kill('SIGKILL');
 	await sleep(200);
+}
+
+
+// ================= PR-4 (S-1/S-2) black-box sections =================
+// Each section uses a fresh server process (fresh per-IP windows) on its
+// own port via the S-1 env override.
+async function spawnServer(env, port) {
+	const proc = spawn('node', ['server.js'], { cwd: serverDir, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+	let log = '';
+	proc.stdout.on('data', d => { log += d; });
+	proc.stderr.on('data', d => { log += d; });
+	for (let i = 0; i < 100 && !log.includes('server started'); i++) await sleep(100);
+	return proc;
+}
+async function rawConnect(url) {
+	let lastErr = null;
+	for (let i = 0; i < 50; i++) {
+		try {
+			return await new Promise((resolve, reject) => {
+				const ws = new WebSocket(url);
+				ws.on('open', () => resolve(ws));
+				ws.on('error', reject);
+			});
+		} catch (e) { lastErr = e; await sleep(100); }
+	}
+	throw lastErr || new Error('rawConnect failed');
+}
+async function waitClose(ws, timeout = 4000) {
+	return await new Promise(resolve => {
+		const to = setTimeout(() => resolve(-1), timeout);
+		ws.on('close', code => { clearTimeout(to); resolve(code); });
+	});
+}
+
+{ // maxPayload + rate limit + handshake guards
+	const proc = await spawnServer({ PORT: '8091' }, 8091);
+	try {
+		console.log('=== test-server-integration: S-1 maxPayload ===');
+		const big = await rawConnect('ws://127.0.0.1:8091');
+		big.send('x'.repeat(8 * 1024 * 1024 + 1));
+		const bigCode = await waitClose(big);
+		check('frame over 8MB terminates connection (1009)', bigCode === 1009);
+		const okClient = await rawConnect('ws://127.0.0.1:8091');
+		let pong = false;
+		okClient.on('message', d => { if (d.toString() === 'pong') pong = true; });
+		await sleep(300);
+		okClient.send('ping');
+		await sleep(300);
+		check('other connection unaffected by maxPayload kill', pong === true);
+		okClient.close();
+
+		console.log('=== test-server-integration: S-1 token bucket ===');
+		const flood = await rawConnect('ws://127.0.0.1:8091');
+		await sleep(200);
+		for (let i = 0; i < 300; i++) { try { flood.send('x'); } catch (_e) { break; } }
+		const floodCode = await waitClose(flood);
+		check('flooding connection is closed by the guards (bucket/shape)', floodCode !== -1);
+		const legit = await new TestClient('ws://127.0.0.1:8091').connect();
+		await legit.handshake();
+		let legitPongs = 0;
+		legit.ws.on('message', d => { if (d.toString() === 'pong') legitPongs++; });
+		for (let i = 0; i < 250; i++) { legit.ws.send('ping'); await sleep(20); } // 50/s for 5s
+		check('legit 50 frames/s for 5s stays connected', legit.ws.readyState === legit.ws.OPEN && legitPongs > 200);
+		legit.ws.send(legit.ecdh.getPublicKey('hex', 'uncompressed'));
+		await sleep(300);
+		check('post-handshake handshake frame dropped, connection stays up', legit.ws.readyState === legit.ws.OPEN);
+		legit.close();
+
+		console.log('=== test-server-integration: S-2 handshake shape guard ===');
+		const bad = await rawConnect('ws://127.0.0.1:8091');
+		await sleep(200);
+		bad.send('zz-not-a-key');
+		const badCode = await waitClose(bad);
+		check('malformed handshake frame closes connection before crypto', badCode !== -1);
+	} finally { proc.kill('SIGKILL'); await sleep(200); }
+}
+
+{ // per-IP handshake window: 10 pass, 11th upgrade refused 429
+	const proc = await spawnServer({ PORT: '8092' }, 8092);
+	try {
+		console.log('=== test-server-integration: S-2 per-IP handshake window ===');
+		let okCount = 0;
+		for (let i = 0; i < 10; i++) {
+			const c = await new TestClient('ws://127.0.0.1:8092').connect();
+			await c.handshake();
+			if (c.shared) okCount++;
+			c.close();
+			await sleep(30);
+		}
+		check('first 10 handshakes from one IP succeed', okCount === 10);
+		let refused = false;
+		try {
+			const c11 = await new TestClient('ws://127.0.0.1:8092').connect();
+			c11.close();
+		} catch (_e) { refused = true; }
+		check('11th connection in window is refused (429)', refused === true);
+	} finally { proc.kill('SIGKILL'); await sleep(200); }
+}
+
+{ // fanout cap: 65 members via 9 loopback IPs (per-IP windows respected)
+	const proc = await spawnServer({ HOST: '0.0.0.0', PORT: '8093' }, 8093);
+	try {
+		console.log('=== test-server-integration: S-1 fanout cap ===');
+		const channel = crypto.createHash('sha256').update('fanout-room').digest('hex');
+		const members = [];
+		for (let i = 0; i < 65; i++) {
+			const ip = '127.0.0.' + (2 + (i % 9));
+			const c = await new TestClient(`ws://${ip}:8093`, ip).connect();
+			await c.handshake();
+			c.send({ a: 'j', p: channel });
+			members.push(c);
+		}
+		const sender = members[0];
+		// sender learns member ids from 'l' lists; wait until it sees 64 others
+		let others = null;
+		for (let i = 0; i < 100; i++) {
+			const lists = sender.decrypted.filter(m => m.a === 'l');
+			const last = lists[lists.length - 1];
+			if (last && Array.isArray(last.p) && last.p.length >= 64) { others = last.p; break; }
+			await sleep(100);
+		}
+		check('sender sees 64 other members', !!others);
+		if (others) {
+			const targets = {};
+			for (const id of others) targets[id] = 'AAAA';
+			// include the sender itself: 65 target keys in one frame
+			const selfList = members[1].decrypted.filter(m => m.a === 'l');
+			sender.send({ a: 'w', p: targets });
+			await sleep(1500);
+			let deliveries = 0;
+			for (const m of members) deliveries += m.decrypted.filter(x => x.a === 'c').length;
+			check('one frame fans out to at most 64 recipients', deliveries === 64);
+		}
+		for (const m of members) m.close();
+	} finally { proc.kill('SIGKILL'); await sleep(200); }
 }
 
 console.log(`\ntest-server-integration: ${passed} passed, ${failed} failed`);

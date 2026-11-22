@@ -45,17 +45,95 @@ console.log('RSA key pair generated successfully');
 const config = {
 	rsaPrivate: keyPair.rsaPrivate,
 	rsaPublic: keyPair.rsaPublic,
-	wsHost: '127.0.0.1',
-	wsPort: 8088,
+	// Env override for tests / co-hosted instances (S-1 testability);
+	// defaults unchanged. 反代后 remoteAddress 恒为代理 IP，见部署文档。
+	wsHost: process.env.HOST || '127.0.0.1',
+	wsPort: Number(process.env.PORT) || 8088,
 	seenTimeout: 60000,
 	debug: false
+};
+
+// ---- S-1/S-2 rate limits (PR-4). Same values and semantics as
+// worker/ratelimit.js — keep the two in sync. Derivations: legal file
+// sending peaks at 50 frames/s (client/js/util.file.js batches), so the
+// bucket refills at 60/s with capacity 120; byte window 350MB / 10 min
+// per connection; fanout 64; channel members 200; handshakes: a legal
+// client handshakes exactly once per connection. Only frame length and
+// frequency metadata is counted, never payload (RULES 1); counters are
+// in-memory only (RULES 4). ----
+const RL = {
+	maxFrameBytes: 8 * 1024 * 1024,
+	bucketCapacity: 120,
+	refillPerSec: 60,
+	maxViolations: 3,
+	byteWindowMs: 10 * 60 * 1000,
+	byteWindowMax: 350 * 1024 * 1024,
+	maxFanout: 64,
+	maxChannelMembers: 200,
+	maxConnectionsGlobal: 1000,
+	maxConnectionsPerIp: 100,
+	maxHandshakesPerConnection: 3,
+	maxHandshakesPerIp: 10,
+	handshakeWindowMs: 60 * 1000,
+	ipMapMaxEntries: 10000
+};
+const HANDSHAKE_FRAME_RE = /^04[0-9a-fA-F]{192}$/;
+const hsIpMap = new Map(); // ip -> {count, resetAt}
+const rlBucketAllow = (state, now) => {
+	const elapsedSec = Math.max(0, (now - state.last) / 1000);
+	state.tokens = Math.min(RL.bucketCapacity, state.tokens + elapsedSec * RL.refillPerSec);
+	state.last = now;
+	if (state.tokens >= 1) {
+		state.tokens -= 1;
+		return { allow: true, shouldClose: false };
+	}
+	state.violations += 1;
+	return { allow: false, shouldClose: state.violations >= RL.maxViolations };
+};
+const rlByteWindowAllow = (state, length, now) => {
+	if (now - state.start > RL.byteWindowMs) {
+		state.start = now;
+		state.bytes = 0;
+	}
+	state.bytes += length;
+	return state.bytes <= RL.byteWindowMax;
+};
+const rlIpHandshakeAllow = (ip, now) => {
+	if (hsIpMap.size > RL.ipMapMaxEntries) {
+		for (const [k, v] of hsIpMap) if (v.resetAt <= now) hsIpMap.delete(k);
+		if (hsIpMap.size > RL.ipMapMaxEntries) hsIpMap.clear();
+	}
+	let rec = hsIpMap.get(ip);
+	if (!rec || rec.resetAt <= now) {
+		rec = { count: 0, resetAt: now + RL.handshakeWindowMs };
+		hsIpMap.set(ip, rec);
+	}
+	rec.count += 1;
+	return rec.count <= RL.maxHandshakesPerIp;
+};
+const rlIpHandshakeCount = (ip, now) => {
+	const rec = hsIpMap.get(ip);
+	if (!rec || rec.resetAt <= now) return 0;
+	return rec.count;
 };
 
 
 const wss = new ws.Server({
 	host: config.wsHost,
 	port: config.wsPort,
-	perMessageDeflate: false
+	perMessageDeflate: false,
+	// S-1: the only limit enforced before a full frame lands in memory.
+	maxPayload: RL.maxFrameBytes,
+	// S-2: once an IP has burned its handshake window, refuse upgrades
+	// with 429 before any per-connection work happens.
+	verifyClient: (info, cb) => {
+		const ip = (info.req && info.req.socket && info.req.socket.remoteAddress) || 'unknown';
+		if (rlIpHandshakeCount(ip, Date.now()) >= RL.maxHandshakesPerIp) {
+			cb(false, 429, 'Too Many Requests');
+			return;
+		}
+		cb(true);
+	}
 });
 
 console.log('server started', config.wsHost, config.wsPort);
@@ -134,7 +212,7 @@ const removeClient = (clientId) => {
 
 // WebSocket server connection event handler
 // WebSocket 服务器连接事件处理程序
-wss.on('connection', (connection) => {
+wss.on('connection', (connection, req) => {
 
 	if (
 		!connection
@@ -184,6 +262,25 @@ wss.on('connection', (connection) => {
 		return;
 	}
 
+	// S-1 connection caps: global and per-IP. NOTE: behind the Docker
+	// nginx proxy remoteAddress is the proxy IP, so the per-IP cap can
+	// throttle a whole NAT/proxy — raise it for >100-user single-egress
+	// deployments (see deployment docs). X-Forwarded-For is not trusted.
+	const connIp = (req && req.socket && req.socket.remoteAddress) || 'unknown';
+	let sameIpCount = 0;
+	for (
+		const otherId in clients
+	) {
+		if (clients[otherId].ip === connIp) sameIpCount++;
+	}
+	if (
+		Object.keys(clients).length >= RL.maxConnectionsGlobal ||
+		sameIpCount >= RL.maxConnectionsPerIp
+	) {
+		closeConnection(connection);
+		return;
+	}
+
 	logEvent('connection', clientId, 'debug');
 
 
@@ -191,7 +288,12 @@ wss.on('connection', (connection) => {
 		connection: connection,
 		seen: getTime(),
 		key: null,
-		channel: null
+		channel: null,
+		// S-1/S-2 guards (in-memory only, die with the connection)
+		ip: connIp,
+		bucket: { tokens: RL.bucketCapacity, last: Date.now(), violations: 0 },
+		byteWin: { start: Date.now(), bytes: 0 },
+		hsAttempts: 0
 	};
 
 	try {
@@ -222,6 +324,19 @@ wss.on('connection', (connection) => {
 
 		clients[clientId].seen = getTime();
 
+		// S-1 connection guards (same semantics as worker/ratelimit.js):
+		// token bucket + rolling byte window, metadata only (RULES 1).
+		const rlRec = clients[clientId];
+		const rlVerdict = rlBucketAllow(rlRec.bucket, Date.now());
+		if (!rlVerdict.allow) {
+			if (rlVerdict.shouldClose) connection.close(1008);
+			return;
+		}
+		if (!rlByteWindowAllow(rlRec.byteWin, message.length, Date.now())) {
+			connection.close(1008);
+			return;
+		}
+
 		if (
 			message === 'ping'
 		) {
@@ -231,11 +346,35 @@ wss.on('connection', (connection) => {
 
 		logEvent('message', clientId, 'debug'); // SECURITY: never log raw message content
 
+		// S-2: handshake-shaped frame on an established connection is
+		// dropped; the handshake branch is unreachable once shared exists.
+		if (
+			clients[clientId].shared &&
+			HANDSHAKE_FRAME_RE.test(message)
+		) {
+			return;
+		}
+
 		if (
 			!clients[clientId].shared &&
 			message.length < 2048
 		) {
 
+			// S-2 cheap pre-checks before any cryptographic work: exact
+			// frame shape, per-connection attempts, per-IP window.
+			if (!HANDSHAKE_FRAME_RE.test(message)) {
+				closeConnection(connection);
+				return;
+			}
+			clients[clientId].hsAttempts++;
+			if (clients[clientId].hsAttempts > RL.maxHandshakesPerConnection) {
+				closeConnection(connection);
+				return;
+			}
+			if (!rlIpHandshakeAllow(clients[clientId].ip, Date.now())) {
+				closeConnection(connection);
+				return;
+			}
 
 			try {
 
@@ -275,6 +414,18 @@ wss.on('connection', (connection) => {
 	});
 
 
+
+	connection.on('error', (error) => {
+
+		// ws emits 'error' for receiver failures — including the S-1
+		// maxPayload kill (1009). Without a listener Node treats it as an
+		// unhandled 'error' event and the whole process dies with the
+		// connection. Log the type only; cleanup runs via 'close'.
+		// maxPayload 等接收错误会以 'error' 事件抛出，无监听会拖垮进程；
+		// 这里只吞掉并记类型，清理走 close 路径。
+		logEvent('connection-error', [clientId, error && error.code], 'error');
+
+	});
 
 	connection.on('close', (event) => {
 
@@ -343,6 +494,15 @@ const handleJoinChannel = (clientId, decrypted) => {
 		return;
 	}
 
+	// S-1: channel member cap (silent refuse, parity with worker).
+	if (
+		channels[decrypted.p] &&
+		channels[decrypted.p].length >= RL.maxChannelMembers
+	) {
+		logEvent('message-join', [clientId, 'channel full'], 'error');
+		return;
+	}
+
 	try {
 		const channel = decrypted.p;
 
@@ -407,13 +567,18 @@ const handleChannelMessage = (clientId, decrypted) => {
 	try {
 		const channel = clients[clientId].channel;
 
+		// S-1: fanout cap — at most RL.maxFanout recipients per frame.
+		let fanout = 0;
+
 		for (const member in decrypted.p) {
+			if (fanout >= RL.maxFanout) break;
 			const targetClient = clients[member];
 
 			if (
 				isString(decrypted.p[member]) &&
 				isClientInChannel(targetClient, channel)
 			) {
+				fanout++;
 				const messageObj = {
 					a: 'c',
 					p: decrypted.p[member],

@@ -1,5 +1,6 @@
 import { generateClientId, encryptMessage, decryptMessage, logEvent, isString, isObject, getTime } from './utils.js';
 import { sendWebPush, isAcceptableEndpoint } from './push.js';
+import { createBucket, bucketAllow, createByteWindow, byteWindowAllow, ipHandshakeAllow, isHandshakeFrame, MAX_FANOUT, MAX_CHANNEL_MEMBERS, MAX_CONNECTIONS_PER_DO, MAX_HANDSHAKES_PER_CONNECTION } from './ratelimit.js';
 
 // Durable Object classes must be exported from the entrypoint for wrangler.
 export { VapidStore } from './vapid.js';
@@ -257,18 +258,24 @@ export class ChatRoom {  constructor(state, env) {
       await this.initRSAKeyPair();
     }
 
+    // S-1: per-DO connection cap, checked before any WebSocketPair work.
+    // One DO serves one room: 200 members + reconnect overlap headroom.
+    if (Object.keys(this.clients).length >= MAX_CONNECTIONS_PER_DO) {
+      return new Response('Too many connections', { status: 503 });
+    }
+
     const webSocketPair = new WebSocketPair();
     const [client, server] = Object.values(webSocketPair);
 
     // Accept the WebSocket connection
-    this.handleSession(server);
+    this.handleSession(server, request.headers.get('CF-Connecting-IP') || 'unknown');
 
     return new Response(null, {
       status: 101,
       webSocket: client,
     });
   }  // WebSocket connection event handler
-  async handleSession(connection) {    connection.accept();
+  async handleSession(connection, ip) {    connection.accept();
 
     // 清理旧连接
     await this.cleanupOldConnections();
@@ -286,8 +293,14 @@ export class ChatRoom {  constructor(state, env) {
       seen: getTime(),
       key: null,
       shared: null,
-      channel: null
+      channel: null,
+      // S-1/S-2 guards (in-memory only, die with the connection — RULES 4)
+      ip: ip || 'unknown',
+      bucket: createBucket(Date.now()),
+      byteWin: createByteWindow(Date.now()),
+      hsAttempts: 0
     };
+    if (!this.hsIpMap) this.hsIpMap = new Map();
 
     // Send RSA public key (plus R1 migration signature when a previous
     // keypair is still within its 48h handover window).
@@ -310,22 +323,68 @@ export class ChatRoom {  constructor(state, env) {
 
       this.clients[clientId].seen = getTime();
 
+      // S-1 connection guards: token bucket + rolling byte window. Only
+      // frame length/frequency metadata is counted — never payload
+      // (RULES 1). NOTE: the 8MB check below still happens after the
+      // frame has reached this DO; per-room sharding bounds the blast
+      // radius, and pre-DO shedding belongs to the platform layer.
+      const rec = this.clients[clientId];
+      const verdict = bucketAllow(rec.bucket, Date.now());
+      if (!verdict.allow) {
+        if (verdict.shouldClose) this.closeConnection(connection);
+        return;
+      }
+      if (!byteWindowAllow(rec.byteWin, message.length, Date.now())) {
+        this.closeConnection(connection);
+        return;
+      }
+
       if (message === 'ping') {
         this.sendMessage(connection, 'pong');
         return;
       }
 
       // SECURITY: never log raw message content (may contain ciphertext or, worse, plaintext)
-      logEvent('message', clientId, 'debug');      // Handle key exchange
+      logEvent('message', clientId, 'debug');
+      // S-2: a handshake-shaped frame on an established connection is
+      // dropped — the handshake branch below is unreachable once shared.
+      if (this.clients[clientId].shared && isHandshakeFrame(message)) {
+        return;
+      }
+      // Handle key exchange
       if (!this.clients[clientId].shared && message.length < 2048) {
+        // S-2 cheap pre-checks, all before any cryptographic work:
+        // exact frame shape, per-connection attempt cap, per-IP window.
+        // DO-local per-IP counting only covers this room (a determined
+        // attacker can hop rooms) — real per-IP shedding is the platform
+        // rate-limit rule; this layer is defence in depth, not a claim
+        // of equivalence.
+        if (!isHandshakeFrame(message)) {
+          this.closeConnection(connection);
+          return;
+        }
+        this.clients[clientId].hsAttempts++;
+        if (this.clients[clientId].hsAttempts > MAX_HANDSHAKES_PER_CONNECTION) {
+          this.closeConnection(connection);
+          return;
+        }
+        if (!ipHandshakeAllow(this.hsIpMap, this.clients[clientId].ip, Date.now())) {
+          this.closeConnection(connection);
+          return;
+        }
+
         try {
-          // Generate ECDH key pair using P-384 curve (equivalent to secp384r1)
+          // Generate ECDH key pair using P-384 curve (equivalent to secp384r1).
+          // extractable: false — aligned with the client (NodeCrypt.js):
+          // the private key is only ever used for deriveBits, never exported;
+          // WebCrypto public keys stay exportable regardless.
+          // 与客户端对齐：私钥不可导出（公钥在 WebCrypto 下恒可导出）。
           const keys = await crypto.subtle.generateKey(
             {
               name: 'ECDH',
               namedCurve: 'P-384'
             },
-            true,
+            false,
             ['deriveBits', 'deriveKey']
           );
 
@@ -476,6 +535,13 @@ export class ChatRoom {  constructor(state, env) {
       return;
     }
 
+    // S-1: channel member cap (silent refuse, same style as other
+    // invalid-join drops here — no new protocol surface).
+    if (this.channels[decrypted.p] && this.channels[decrypted.p].length >= MAX_CHANNEL_MEMBERS) {
+      logEvent('message-join', [clientId, 'channel full'], 'error');
+      return;
+    }
+
     try {
       const channel = decrypted.p;
 
@@ -537,11 +603,11 @@ export class ChatRoom {  constructor(state, env) {
     
     try {
       const channel = this.clients[clientId].channel;
-      // 过滤有效的目标成员
+      // 过滤有效的目标成员（S-1: 扇出封顶 MAX_FANOUT，超出静默丢弃）
       const validMembers = Object.keys(decrypted.p).filter(member => {
         const targetClient = this.clients[member];
         return isString(decrypted.p[member]) && this.isClientInChannel(targetClient, channel);
-      });
+      }).slice(0, MAX_FANOUT);
 
       // 处理所有有效的目标成员
       for (const member of validMembers) {
