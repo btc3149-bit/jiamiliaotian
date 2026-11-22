@@ -1,9 +1,10 @@
 // Import necessary modules
 // 导入必要的模块
-import { deflate, inflate, Deflate } from 'fflate';
+import { inflate, Deflate } from 'fflate';
 import { showFileUploadModal } from './util.fileUpload.js';
 import { imageFileToCleanFile } from './util.image.js';
 import { t } from './util.i18n.js';
+import { callBridge, hasBridge } from './util.bridge.js';
 // v1.2.0 #17: resume-request validation
 import { sanitizeResumeRequest } from './util.validate.js';
 // v1.7.0 #19: incremental SHA-256 (streaming hash of large files without
@@ -279,16 +280,6 @@ async function compressFilesToArchive(files, volumeSize = DEFAULT_VOLUME_SIZE) {
 	}
 }
 
-// Helper function to read file as array buffer
-// 辅助函数：将文件读取为ArrayBuffer
-function readFileAsArrayBuffer(file) {
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onload = (e) => resolve(e.target.result);
-		reader.onerror = () => reject(reader.error);
-		reader.readAsArrayBuffer(file);
-	});
-}
 
 // Decompress volumes back to file
 // 将分卷解压回文件
@@ -391,7 +382,7 @@ async function decompressArchiveToFiles(volumes, fileManifest, archiveHash = nul
 						// Extract files from archive
 				let dataOffset = 0;
 				const extractedFiles = [];
-						for (const fileInfo of fileManifest) {
+						for (const _fileInfo of fileManifest) {
 					// Read file metadata: [name_length(4)][name][size(8)][data]
 					const nameLengthBytes = decompressed.slice(dataOffset, dataOffset + 4);
 					const nameLengthView = new DataView(nameLengthBytes.buffer);
@@ -440,9 +431,7 @@ async function decompressArchiveToFiles(volumes, fileManifest, archiveHash = nul
 // Setup file sending functionality
 // 设置文件发送功能
 export function setupFileSend({
-	inputSelector,
 	attachBtnSelector,
-	fileInputSelector,
 	onSend
 }) {
 	const attachBtn = document.querySelector(attachBtnSelector);
@@ -480,8 +469,8 @@ async function handleFilesUpload(files, onSend) {
 	// 服务器零存储意味着整次传输在两端都驻留内存；明确的天花板胜过崩掉的标签页。
 	const bad = validateTransferSizes(Array.from(files).map(f => f.size));
 	if (bad) {
-		if (window.addSystemMsg) {
-			window.addSystemMsg(t('file.too_large', 'Transfer too large — the limit is {limit} per send (everything stays in memory; the server stores nothing).').replace('{limit}', formatFileSize(MAX_TRANSFER_BYTES)), true)
+		if (hasBridge('addSystemMsg')) {
+			callBridge('addSystemMsg', t('file.too_large', 'Transfer too large — the limit is {limit} per send (everything stays in memory; the server stores nothing).').replace('{limit}', formatFileSize(MAX_TRANSFER_BYTES)), true)
 		}
 		return;
 	}
@@ -490,13 +479,12 @@ async function handleFilesUpload(files, onSend) {
 	
 	try {
 		// Show compression progress
-		let progressElement = null;
 		
-		function showProgress(message) {
+		function showProgress() {
 			// 删除系统提示
 		}
 		
-		function updateProgress(message) {
+		function updateProgress() {
 			// 删除系统提示
 		}
 		
@@ -555,7 +543,6 @@ async function handleFilesUpload(files, onSend) {
 			
 		} else {
 			// Multiple files upload - create archive
-			const totalSize = files.reduce((sum, file) => sum + file.size, 0);
 			showProgress();
 			
 			const { volumes, originalSize, compressedSize, archiveHash, fileCount, fileManifest } = await compressFilesToArchive(files);
@@ -599,8 +586,8 @@ async function handleFilesUpload(files, onSend) {
 		
 	} catch (error) {
 		console.error('File compression error:', error);
-		if (window.addSystemMsg) {
-			window.addSystemMsg(`Failed to compress files: ${error.message}`);
+		if (hasBridge('addSystemMsg')) {
+			callBridge('addSystemMsg', `Failed to compress files: ${error.message}`);
 		}
 	}
 }
@@ -799,7 +786,7 @@ function renderFileProgress(fileId) {
 // Handle incoming file messages
 // 处理接收到的文件消息
 export function handleFileMessage(message, isPrivate = false, roomIdx = null) {
-	const { type, fileId, userName } = message;
+	const { type } = message;
 
 	switch (type) {
 		case 'file_start':
@@ -882,11 +869,11 @@ function handleFileStart(message, isPrivate, roomIdx) {
 	// 只是拒收）。聊天条目照常渲染，并如实标注。
 	if ((typeof compressedSize === 'number' && compressedSize > MAX_TRANSFER_BYTES) ||
 		(typeof originalSize === 'number' && originalSize > MAX_TRANSFER_BYTES)) {
-		if (window.addSystemMsg) {
-			window.addSystemMsg(t('system.file_too_large_incoming', 'Refused "{name}": {size} exceeds this device\'s transfer limit ({limit}).').replace('{name}', fileName || '').replace('{size}', formatFileSize(Math.max(compressedSize || 0, originalSize || 0))).replace('{limit}', formatFileSize(MAX_TRANSFER_BYTES)), true)
+		if (hasBridge('addSystemMsg')) {
+			callBridge('addSystemMsg', t('system.file_too_large_incoming', 'Refused "{name}": {size} exceeds this device\'s transfer limit ({limit}).').replace('{name}', fileName || '').replace('{size}', formatFileSize(Math.max(compressedSize || 0, originalSize || 0))).replace('{limit}', formatFileSize(MAX_TRANSFER_BYTES)), true)
 		}
-		if (window.addOtherMsg) {
-			window.addOtherMsg({
+		if (hasBridge('addOtherMsg')) {
+			callBridge('addOtherMsg', {
 				type: 'file',
 				fileId,
 				fileName: isArchive ? `${fileCount} files` : fileName,
@@ -921,7 +908,7 @@ function handleFileStart(message, isPrivate, roomIdx) {
 	window.fileTransfers.set(fileId, fileTransfer);
 	
 	// 添加文件消息到聊天
-	if (window.addOtherMsg) {
+	if (hasBridge('addOtherMsg')) {
 		let displayData;
 		if (isArchive) {
 			displayData = {
@@ -945,7 +932,7 @@ function handleFileStart(message, isPrivate, roomIdx) {
 			};
 		}
 		
-		window.addOtherMsg(displayData, userName, userName, false, isPrivate ? 'file_private' : 'file');
+		callBridge('addOtherMsg', displayData, userName, userName, false, isPrivate ? 'file_private' : 'file');
 	}
 }
 
@@ -996,8 +983,8 @@ function handleFileComplete(message) {
 	}
 	const req = sanitizeResumeRequest(fileId, missing, transfer.totalVolumes);
 	if (!req) return;
-	if (window.addSystemMsg) {
-		window.addSystemMsg(t('system.resume_requested', 'Missing {n} part(s) of "{name}" — requesting re-send.').replace('{n}', String(missing.length)).replace('{name}', transfer.fileName || ''), true)
+	if (hasBridge('addSystemMsg')) {
+		callBridge('addSystemMsg', t('system.resume_requested', 'Missing {n} part(s) of "{name}" — requesting re-send.').replace('{n}', String(missing.length)).replace('{name}', transfer.fileName || ''), true)
 	}
 	routeFileMessage(transfer, {
 		type: 'file_resume_req',
@@ -1035,7 +1022,7 @@ export async function downloadFile(fileId) {
 		}
 	} catch (error) {
 		console.error('Download error:', error);
-		window.addSystemMsg(`Failed to download: ${error.message}`);
+		callBridge('addSystemMsg', `Failed to download: ${error.message}`);
 	}
 }
 
@@ -1180,7 +1167,7 @@ export async function previewFile(fileId) {
 	try {
 		const blob = await getTransferBlob(fileId);
 		if (!blob) {
-			window.addSystemMsg && window.addSystemMsg(t('file.preview_unavailable', 'Preview unavailable — the transfer is not complete or has no data.'), true);
+			callBridge('addSystemMsg', t('file.preview_unavailable', 'Preview unavailable — the transfer is not complete or has no data.'), true);
 			return;
 		}
 		const url = URL.createObjectURL(blob);
@@ -1215,16 +1202,16 @@ export async function previewFile(fileId) {
 			try {
 				const how = await saveBlobAuto(blob, transfer.fileName);
 				if (how === 'none') {
-					window.addSystemMsg && window.addSystemMsg(t('file.save_unsupported', 'This app environment cannot save files — long-press the preview image instead.'), true);
+					callBridge('addSystemMsg', t('file.save_unsupported', 'This app environment cannot save files — long-press the preview image instead.'), true);
 				}
 			} catch (err) {
-				window.addSystemMsg && window.addSystemMsg('Save failed: ' + (err && err.message || err), true);
+				callBridge('addSystemMsg', 'Save failed: ' + (err && err.message || err), true);
 			} finally {
 				saveBtn.disabled = false;
 			}
 		});
 	} catch (error) {
-		window.addSystemMsg && window.addSystemMsg('Preview failed: ' + (error && error.message || error), true);
+		callBridge('addSystemMsg', 'Preview failed: ' + (error && error.message || error), true);
 		if (overlay) overlay.remove();
 	}
 }

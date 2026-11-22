@@ -1,0 +1,1 @@
+{"description":"Tauri 2 desktop/mobile shell tooling. The Tauri CLI is consumed ONLY as the pinned npm package below (prebuilt binary) — never compiled from source with cargo.","devDependencies":{"@tauri-apps/cli":"2.12.6"},"name":"jiamiliaotian-desktop","private":true,"scripts":{"tauri":"tauri"},"version":"1.9.3"}

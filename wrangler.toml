@@ -1,5 +1,12 @@
 name = "nodecrypt"
 main = "worker/index.js"
+# NOTE (item 34): compatibility_date intentionally stays at 2024-09-23 in
+# this round. Raising it switches batches of Workers runtime defaults and
+# must be evaluated in its own PR with the Worker canary re-run — do not
+# bump it as a drive-by, and do not enable observability while doing so.
+# 注（第 34 条）：本轮有意不动 compatibility_date。上调会成批切换
+# 运行时默认行为，须单独 PR 评估并重跑 Worker 金丝雀，不得顺带修改，
+# 更不得顺带打开下方 observability。
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
