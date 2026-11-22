@@ -6,10 +6,10 @@ WORKDIR /app
 
 # Copy package.json first to leverage Docker's caching
 # 首先复制 package.json 以利用 Docker 的缓存
-COPY server/package.json ./server/
-# Install production dependencies
-# 安装生产依赖
-RUN cd server && npm install --production --no-package-lock --no-audit
+COPY server/package.json server/package-lock.json ./server/
+# Install production dependencies from the lock file (reproducible)
+# 按锁文件安装生产依赖（可复现）
+RUN cd server && npm ci --omit=dev --no-audit
 
 # Copy only the server.js file
 # 仅复制 server.js 文件
@@ -102,11 +102,11 @@ http {
         # R3 fix (review): mirror the worker path's security headers so the
         # Docker deployment gets the same XSS defense-in-depth.
         # 修复评审 R3：Docker 路径补齐与 worker 相同的安全响应头。
-        add_header Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' wss: https:; font-src 'self' data:" always;
+        add_header Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' wss:; font-src 'self' data:" always;
         add_header X-Content-Type-Options "nosniff" always;
         add_header Referrer-Policy "no-referrer" always;
         add_header X-Frame-Options "DENY" always;
-        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+        add_header Permissions-Policy "camera=(self), microphone=(self), geolocation=()" always;
         
         # Main location block - handles both HTTP and WebSocket
         # 主位置块 - 处理 HTTP 和 WebSocket

@@ -25,11 +25,15 @@ jobs:
       - name: Build client bundle
         run: npm run build
 
+      - name: Install server dependencies (integration tests)
+        working-directory: server
+        run: npm ci --ignore-scripts
+
       - name: Crypto interop & tamper tests
         run: npm test
 
       - name: Syntax check all JS sources
         run: |
-          for f in server/server.js worker/index.js worker/utils.js client/js/*.js; do
+          for f in server/server.js worker/index.js worker/utils.js worker/push.js worker/vapid.js client/js/*.js; do
             node --check "$f"
           done

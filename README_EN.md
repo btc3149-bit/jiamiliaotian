@@ -23,6 +23,22 @@ docker build -t jiamiliaotian . && docker run -d --name jiamiliaotian -p 80:80 j
 
 Access http://localhost:80
 
+### Feature Differences by Deployment Method (must read)
+
+| Capability | Cloudflare Workers (recommended) | Docker self-hosted |
+|---|---|---|
+| Web Push offline notifications | ✅ | ❌ Not implemented (subscriptions are silently ignored) |
+| Web Push endpoints (/api/vapid etc.) | ✅ | ❌ Node does not implement /api/vapid or push relay: subscription requests reported over the encrypted channel are silently ignored (no error, no notification) — this is not “subscribed but undelivered” |
+| Read receipts / reconnect catch-up | ✅ | ✅ (shared protocol layer) |
+| Security response headers (CSP etc.) | ✅ | ✅ Aligned (all five headers, incl. CSP/Permissions-Policy, match Workers item by item) |
+| TLS / HSTS | ✅ Cloudflare edge | ⚠️ Image serves HTTP 80 only; TLS and HSTS are the front reverse proxy's job (see TLS note below) |
+| Room sharding / horizontal scaling | ✅ Sharded per DO | ❌ Single process |
+| Server key rotation / migration signature | ✅ 24h rotation + 48h old-key migration signature | ❌ Node has no 24h rotation or migration signature: the RSA key is generated at process start and changes on every restart; pinned clients will hit a key mismatch, disconnect, and must confirm a pin reset to reconnect. Restarting the Node server means every member must re-confirm the server key |
+| Channel name validation | ✅ Enforces room-name SHA-256 hash format | ✅ Aligned (both enforce the room-name SHA-256 hash format) |
+| Stale connection cleanup | ✅ Detaches from channel and broadcasts on cleanup | ✅ Aligned (detaches from channel and broadcasts; member lists contain no offline members) |
+
+> **TLS note for Docker deployments**: The Docker image serves plain HTTP only (port 80). In production, always put a TLS-terminating reverse proxy in front of it (e.g. Caddy / Nginx / Cloudflare Tunnel) and let that layer redirect HTTP to HTTPS and send `Strict-Transport-Security: max-age=31536000; includeSubDomains`. Do not expose port 80 directly to the public internet in plaintext.
+
 ### Method 4: Local Development Deployment
 After cloning the project and installing dependencies, use `npm run dev` to start the development server.
 Use `npm run deploy` to deploy to Cloudflare Workers.
@@ -52,10 +68,11 @@ Jiamiliaotian is a truly end-to-end encrypted chat system that implements a comp
 - **Real-time Member Notifications**: The room online list is completely transparent; any member joining or leaving will notify all members in real-time
 - **No Historical Messages**: Newly joined users cannot see any historical chat records
 - **Private Chat Encryption**: Clicking on a user's avatar can initiate end-to-end encrypted private conversations that are completely invisible to other room members
+- **No transport-layer authentication for joining (design trade-off, please note)**: Anyone who knows the room name can compute its SHA-256 hash and join the channel — the server will send them the member clientId list, relay transport-layer ciphertext to them, and they can observe metadata such as member join/leave events and message timing. Content security rests entirely on the room password: content-layer keys are derived from Curve25519 ECDH plus the PBKDF2-SHA256-stretched room password, so neither the server nor a lurker without the password can read plaintext. The room password is therefore the only content defense — use a strong one; if an unfamiliar member appears in the member list, treat the room name/password as leaked and change both immediately; for high-security scenarios, verify channel fingerprints out-of-band. There is no room owner / kick mechanism by design, as part of the fully transparent member list model.
 
 ### Room Password Mechanism
 
-Room passwords serve as **key derivation factors** in end-to-end encryption: `Final Shared Key = ECDH_Shared_Key XOR SHA256(Room Password)`
+Room passwords serve as **key derivation factors** in end-to-end encryption: `Final Shared Key = ECDH_Shared_Key XOR PBKDF2-SHA256(Room Password, salt = 'nodecrypt:v2:' + Room Name, 200,000 iterations)` (256-bit output)
 
 - **Password Error Isolation**: Rooms with different passwords cannot decrypt each other's messages
 - **Server Blind Spot**: The server can never know the room password
@@ -108,8 +125,8 @@ sequenceDiagram
     S->>C: Forward other clients' public keys
     
     Note over C,O: Phase 5: Password-Enhanced Key Derivation
-    Note over C: Client Key = ECDH_Curve25519(own private key, other's public key) XOR SHA256(password)
-    Note over O: Client Key = ECDH_Curve25519(own private key, other's public key) XOR SHA256(password)
+    Note over C: Client Key = ECDH_Curve25519(own private key, other's public key) XOR PBKDF2-SHA256(password, 'nodecrypt:v2:'+Room Name, 200k)
+    Note over O: Client Key = ECDH_Curve25519(own private key, other's public key) XOR PBKDF2-SHA256(password, 'nodecrypt:v2:'+Room Name, 200k)
     
     Note over C,O: Phase 6: Identity Authentication
     C->>S: Username (ChaCha20 encrypted with client key)
@@ -148,6 +165,8 @@ All encryption-related code is completely open source, using standard cryptograp
 ## ⚠️ Security Recommendations
 
 - **Use Strong Room Passwords**: Room passwords directly affect end-to-end encryption strength; complex passwords are recommended
+- **No Transport-Layer Join Authentication**: Knowing the room name is enough to join and observe metadata (see Privacy Protection Mechanisms); the room password is the only content defense, and an unfamiliar member in the list means you should change both room name and password
+- **Scope of Replay Protection (honest disclosure)**: Ratcheted (KV2) content messages have replay protection. File-transfer volumes, edit/recall actions, call signalling and presence-type actions currently use the legacy session key with no replay protection within a single connection — an attacker positioned at the relay can re-send old ciphertext to re-trigger those actions. Reconnecting rotates the session key, so cross-connection replay does not work. Do not read this as “all messages are replay-protected”.
 - **Password Confidentiality**: If a room password is leaked, subsequent communication in that room may be decrypted (past traffic stays safe thanks to ephemeral ECDH keys)
 - **Verify Fingerprints**: For high-security needs, compare the per-member channel fingerprint shown in the member list out-of-band to rule out server-side MITM
 - **Share Links Carry Credentials**: The `r`/`p` params of an invite link contain the room name and password (obfuscated, not encrypted). Parameters are scrubbed from the address bar on open (history.replaceState), but the link itself equals the room key before it is forwarded — send it over a trusted channel, and for sensitive rooms consider sharing the password separately
@@ -160,7 +179,7 @@ Security researchers are welcome to report vulnerabilities and conduct security 
 
 ## 📄 Open Source License
 
-This project uses the ISC open source license.
+This project uses the AGPL-3.0 open source license; see the License section at the end of this document.
 
 ## ⚠️ Disclaimer
 
