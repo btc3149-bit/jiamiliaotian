@@ -85,14 +85,14 @@ jobs:
 
       - name: Upload artifacts (Windows)
         if: matrix.platform == 'windows-latest'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: jiamiliaotian-windows
           path: desktop/src-tauri/target/release/bundle/*/jiamiliaotian.*
 
       - name: Upload artifacts (macOS)
         if: matrix.platform == 'macos-latest'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: jiamiliaotian-macos-${{ matrix.suffix }}
           if-no-files-found: error
@@ -104,7 +104,7 @@ jobs:
 
       - name: Upload artifacts (Linux)
         if: matrix.platform == 'ubuntu-22.04'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: jiamiliaotian-linux
           path: |
