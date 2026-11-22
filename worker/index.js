@@ -319,13 +319,17 @@ export class ChatRoom {  constructor(state, env) {
       logEvent('message', clientId, 'debug');      // Handle key exchange
       if (!this.clients[clientId].shared && message.length < 2048) {
         try {
-          // Generate ECDH key pair using P-384 curve (equivalent to secp384r1)
+          // Generate ECDH key pair using P-384 curve (equivalent to secp384r1).
+          // extractable: false — aligned with the client (NodeCrypt.js):
+          // the private key is only ever used for deriveBits, never exported;
+          // WebCrypto public keys stay exportable regardless.
+          // 与客户端对齐：私钥不可导出（公钥在 WebCrypto 下恒可导出）。
           const keys = await crypto.subtle.generateKey(
             {
               name: 'ECDH',
               namedCurve: 'P-384'
             },
-            true,
+            false,
             ['deriveBits', 'deriveKey']
           );
 
