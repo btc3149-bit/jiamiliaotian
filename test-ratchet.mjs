@@ -228,5 +228,151 @@ check('skipped store bounded under repeated gaps', (() => {
 	return b2.stats().skipped <= 30;
 })());
 
+console.log('=== test-ratchet: E-1 forged frame burns nothing (peek/commit) ===');
+// Flip the last ciphertext byte of a wire (AEAD tag failure, format intact).
+const forgeWire = (w) => {
+	const p = w.split('|');
+	const ct = Buffer.from(p[4], 'base64');
+	ct[ct.length - 1] ^= 0xff;
+	return p[0] + '|' + p[1] + '|' + p[2] + '|' + p[3] + '|' + ct.toString('base64');
+};
+check('E-1 core: forged frame preempting ci, legitimate frame still decrypts', (() => {
+	const a = new PeerRatchet({ rootKey: rootOf('e1-core'), rekeyEvery: 0 });
+	const b = new PeerRatchet({ rootKey: rootOf('e1-core'), isFirst: true, rekeyEvery: 0 });
+	const w0 = a.encryptOutgoing({ a: 'm', t: 'text', d: 'e1-zero' });
+	const w1 = a.encryptOutgoing({ a: 'm', t: 'text', d: 'e1-one' });
+	if (b.decryptIncoming(forgeWire(w1)) !== null) return false; // forged ci=1 first
+	if (b.decryptIncoming(w0) === null) return false;
+	const got = b.decryptIncoming(w1); // legit ci=1 must survive the forged attempt
+	return got !== null && got.d === 'e1-one' && b.stats().recvIndex === 2;
+})());
+check('E-1: forged out-of-order frame does not burn the skipped key', (() => {
+	const a = new PeerRatchet({ rootKey: rootOf('e1-oo'), rekeyEvery: 0 });
+	const b = new PeerRatchet({ rootKey: rootOf('e1-oo'), isFirst: true, rekeyEvery: 0 });
+	const w0 = a.encryptOutgoing({ a: 'm', t: 'text', d: 'oo-zero' });
+	const w1 = a.encryptOutgoing({ a: 'm', t: 'text', d: 'oo-one' });
+	const w2 = a.encryptOutgoing({ a: 'm', t: 'text', d: 'oo-two' });
+	if (b.decryptIncoming(w2) === null) return false; // buffers skipped keys 0,1
+	if (b.decryptIncoming(forgeWire(w0)) !== null) return false; // forged replay of ci=0
+	const got = b.decryptIncoming(w0); // legit late arrival still decrypts
+	if (!got || got.d !== 'oo-zero') return false;
+	if (b.decryptIncoming(w0) !== null) return false; // same frame replayed again fails
+	const got1 = b.decryptIncoming(w1);
+	return got1 !== null && got1.d === 'oo-one';
+})());
+check('E-1: forged large-gap frame leaves recvIndex/skipped/recvKey untouched', (() => {
+	const b = new PeerRatchet({ rootKey: rootOf('e1-gap'), isFirst: true, rekeyEvery: 0 });
+	const g = b.gens.get(1);
+	const before = { recvIndex: g.recvIndex, skipped: g.skippedCount(), recvKey: hex(g.recvKey) };
+	const forged = 'KV2|1|20000|' + Buffer.alloc(12, 1).toString('base64') + '|' + Buffer.alloc(32, 2).toString('base64');
+	if (b.decryptIncoming(forged) !== null) return false;
+	return g.recvIndex === before.recvIndex && g.skippedCount() === before.skipped &&
+		hex(g.recvKey) === before.recvKey;
+})());
+check('E-1: structurally invalid frame rejected before derivation, state untouched', (() => {
+	const a = new PeerRatchet({ rootKey: rootOf('e1-struct'), rekeyEvery: 0 });
+	const b = new PeerRatchet({ rootKey: rootOf('e1-struct'), isFirst: true, rekeyEvery: 0 });
+	const w0 = a.encryptOutgoing({ a: 'm', t: 'text', d: 'struct-zero' });
+	const shortIv = 'KV2|1|0|' + Buffer.alloc(3, 1).toString('base64') + '|' + Buffer.alloc(32, 2).toString('base64');
+	const shortSealed = 'KV2|1|0|' + Buffer.alloc(12, 1).toString('base64') + '|' + Buffer.alloc(16, 2).toString('base64');
+	if (b.decryptIncoming(shortIv) !== null || b.decryptIncoming(shortSealed) !== null) return false;
+	if (b.stats().recvIndex !== 0) return false;
+	const got = b.decryptIncoming(w0);
+	return got !== null && got.d === 'struct-zero';
+})());
+
+console.log('=== test-ratchet: E-1 peek/commit units ===');
+check('E-1: peekRecvKey does not mutate state; mk matches sender derivation', (() => {
+	const root = rootOf('e1-peek');
+	const send = new RatchetGeneration(root, false);
+	const recv = new RatchetGeneration(root, true);
+	const mks = [send.nextSendKey(), send.nextSendKey(), send.nextSendKey()];
+	const keyBefore = hex(recv.recvKey);
+	const peeked = recv.peekRecvKey(2);
+	if (!peeked || hex(peeked.mk) !== hex(mks[2].mk)) return false;
+	return recv.recvIndex === 0 && recv.skippedCount() === 0 && hex(recv.recvKey) === keyBefore;
+})());
+check('E-1: commit advances once; second commit is a no-op', (() => {
+	const root = rootOf('e1-commit');
+	const send = new RatchetGeneration(root, false);
+	const recv = new RatchetGeneration(root, true);
+	const mks = [send.nextSendKey(), send.nextSendKey(), send.nextSendKey()];
+	const peeked = recv.peekRecvKey(2);
+	peeked.commit();
+	if (recv.recvIndex !== 3 || recv.skippedCount() !== 2) return false;
+	if (hex(recv.skipped.get(0)) !== hex(mks[0].mk) || hex(recv.skipped.get(1)) !== hex(mks[1].mk)) return false;
+	const keyAfter = hex(recv.recvKey);
+	peeked.commit(); // no-op
+	return recv.recvIndex === 3 && recv.skippedCount() === 2 && hex(recv.recvKey) === keyAfter;
+})());
+check('E-1: peekSkipped does not consume; commit deletes exactly once', (() => {
+	const root = rootOf('e1-peekskip');
+	const send = new RatchetGeneration(root, false);
+	const recv = new RatchetGeneration(root, true);
+	const mks = [send.nextSendKey(), send.nextSendKey()];
+	recv.peekRecvKey(1).commit(); // buffers skipped key for ci=0
+	const peeked = recv.peekSkipped(0);
+	if (!peeked || hex(peeked.mk) !== hex(mks[0].mk)) return false;
+	if (recv.skippedCount() !== 1) return false; // peek consumed nothing
+	peeked.commit();
+	if (recv.skippedCount() !== 0) return false;
+	peeked.commit(); // no-op
+	return recv.peekSkipped(0) === null && recv.skippedCount() === 0;
+})());
+check('E-1: recvKeyFor/takeSkipped compat wrappers still consume immediately', (() => {
+	const root = rootOf('e1-compat');
+	const send = new RatchetGeneration(root, false);
+	const recv = new RatchetGeneration(root, true);
+	const mks = [send.nextSendKey(), send.nextSendKey(), send.nextSendKey()];
+	const mk1 = recv.recvKeyFor(1); // skips ci=0 into the store, consumes ci=1
+	if (!mk1 || hex(mk1) !== hex(mks[1].mk) || recv.recvIndex !== 2 || recv.skippedCount() !== 1) return false;
+	const mk0 = recv.takeSkipped(0);
+	return !!mk0 && hex(mk0) === hex(mks[0].mk) && recv.skippedCount() === 0 && recv.takeSkipped(0) === null;
+})());
+
+console.log('=== test-ratchet: E-1 golden fixture interop (v1.9.3 wires) ===');
+// Fixture generated on UNMODIFIED v1.9.3 (see §0.4): sender isFirst=false,
+// receiver isFirst=true. Constants copied verbatim from
+// ~/workspace/jiamiliaotian-audit/fixtures-v193.json.
+const GOLD_ROOT_HEX = 'e52b48334d65de7472928736f0312f8e0285e20f34b5e000a882784e1d755c28';
+const GOLD_ROOT2_HEX = '795a810007bc89b38b7933c320c255717fb1db24f5804153a6e670a38a31a7b1';
+const GOLD_PLAINS = [
+	{ a: 'm', t: 'text', d: 'golden-0', id: 'gid0aaaaaa' },
+	{ a: 'm', t: 'text', d: 'golden-1', id: 'gid1aaaaaa' },
+	{ a: 'm', t: 'text', d: 'golden-2', id: 'gid2aaaaaa' },
+	{ a: 'm', t: 'text', d: 'golden-3', id: 'gid3aaaaaa' },
+	{ a: 'm', t: 'text', d: 'golden-4', id: 'gid4aaaaaa' },
+	{ a: 'm', t: 'text', d: 'golden-5', id: 'gid5aaaaaa' },
+	{ a: 'm', t: 'text', d: 'golden-6', id: 'gid6aaaaaa' },
+	{ a: 'm', t: 'text', d: 'golden-7', id: 'gid7aaaaaa' }
+];
+const GOLD_WIRES = [
+	'KV2|1|0|7gwbOU1XDLoiUHUY|9Jto0cqoc2mw1/9D8T8cecvukfvWWEzFntY2qlYnQ2dxmsWGceoYKPBANC73LG5EkwjSH0Eyh4KQycF2g1OpI4782rgQ',
+	'KV2|1|1|afR9hi+PQ0IcBRfO|Pq75RmA50L1TdYQq0tL9Pti/EY6HTtHUKD7LSmi4VNS1Vdoi0OcaHbUC/1y2DQfgEioAd3BFqHCoS4DltrgmV/2Ed/vu',
+	'KV2|1|2|cxJMFhyW69DTqDoP|yFzrJT3F6URolSTMgOV70RDwUrQpX7rtsGwfCNGrRF7i5vtrRqwVcvo8nAq5r4APt/qsVtjwt1lCwwoowXbgtgAML3ld',
+	'KV2|1|3|FXBjhNfRer2bjFXm|oIRoIottgvJpeXo11A9OROiWlNiuGUCyCWFd9U+f+FrY2ntYwVTuIfvXi+VqhbmEm4PlJsCCJMXIwKvkgF0fOg+eDYbP',
+	'KV2|1|4|4sFRMCZGuOHx2QT7|YHmcCqlzoNcz+eN424NoX4GwLlPRMEYnmthCC2Du8rnCOAltEkch1dI3NeDg/Gk+efFfTVWFF3yJ/pZILQy2zUHwuv6l',
+	'KV2|1|5|WqedhCMz0rxdmsOu|3Jj2i18pLdJqeTSWAeah2bNlDv/0ggW+oiptyqBbYj2VMw6nzgHiN8fymknNWgbbIC6N8y/sQNSVOICLADP8qZf4AjRH',
+	'KV2|1|6|6AnXSPHsZCXJQ24z|+CnyFhkjqCuJFf5FYbjPcKqbxG9mNDqraC050S1oxyH8alGuDExC/LTujQSy7W+p3jjxk1b4Aoov/CVdWNPrPTqI2K2+',
+	'KV2|1|7|Ux0WgNpv3QLvdFZr|69MhAD/bDoyPGSQiUSoxjkAlYsL0F/Jrl4q5GG/zUcbQP5tEfXzcVpTBqf5VFPCEP4vkyVGDXveWBVhFyf74AxjhKlpk'
+];
+const GOLD_GEN2_PLAIN = { a: 'm', t: 'text', d: 'golden-gen2', id: 'gidgen2aaaa' };
+const GOLD_GEN2_WIRE = 'KV2|2|0|s3AJusSVOdNf5pla|3dIPs9xcCFd3TAgGWOpOPx7NFgnn/Y7WLvRIKR5BsGpgh70uI3r6hL7+BnkRSUTWK6fLL+Cuyf8dRkIG69OBFNuYMJ1VD4AoiQ==';
+const goldEq = (got, want) => got !== null && JSON.stringify(got) === JSON.stringify(want);
+const goldRecv = new PeerRatchet({ rootKey: Uint8Array.from(Buffer.from(GOLD_ROOT_HEX, 'hex')), isFirst: true, rekeyEvery: 0 });
+check('golden fixture: wires 0-4 decrypt in order, plaintext equal', (() => {
+	for (let i = 0; i <= 4; i++) if (!goldEq(goldRecv.decryptIncoming(GOLD_WIRES[i]), GOLD_PLAINS[i])) return false;
+	return true;
+})());
+check('golden fixture: wire 7 before 5/6 (out of order), then 5/6 decrypt, plaintext equal', (() => {
+	if (!goldEq(goldRecv.decryptIncoming(GOLD_WIRES[7]), GOLD_PLAINS[7])) return false;
+	if (!goldEq(goldRecv.decryptIncoming(GOLD_WIRES[5]), GOLD_PLAINS[5])) return false;
+	return goldEq(goldRecv.decryptIncoming(GOLD_WIRES[6]), GOLD_PLAINS[6]);
+})());
+check('golden fixture: gen2 wire decrypts after seedRoot(root2), plaintext equal', (() => {
+	if (!goldRecv.seedRoot(2, Uint8Array.from(Buffer.from(GOLD_ROOT2_HEX, 'hex')))) return false;
+	return goldEq(goldRecv.decryptIncoming(GOLD_GEN2_WIRE), GOLD_GEN2_PLAIN);
+})());
+
 console.log(`\ntest-ratchet: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

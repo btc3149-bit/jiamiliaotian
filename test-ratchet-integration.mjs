@@ -1,5 +1,4 @@
-// ==================== v1.6.0 #15: NodeCrypt ratchet integration test ====================
-// v1.6.0 #15：NodeCrypt ratchet 集成测试。
+// ==================== v1.6.0 #15: NodeCrypt ratchet integration test =============// v1.6.0 #15：NodeCrypt ratchet 集成测试。
 //
 // Drives TWO real NodeCrypt instances through the full KV2 lifecycle using
 // stubbed WebSocket transports — no mocks of the crypto itself:
@@ -199,6 +198,33 @@ console.log('=== integration: rekey handshake ===');
 		objOld && objOld.d === 'second' && B.channel[ids.A].ratchet.stats().generations.includes(1));
 	// the non-initiator side must refuse to run initiateRekey
 	check('non-initiator cannot initiate rekey', responder.initiateRekey(initId) === false);
+}
+
+// ---- 5. E-1: forged KV2 frames through NodeCrypt burn nothing ----
+// Runs after section 4: both sides are on gen 2, B's gen-2 recvIndex is 0.
+// The next two A->B wires (gen2 ci 0 and 1) are the forgery targets.
+console.log('=== integration: E-1 forged frames via NodeCrypt ===');
+{
+	const forgeWire = (w) => {
+		const p = w.split('|');
+		const ct = Buffer.from(p[4], 'base64');
+		ct[ct.length - 1] ^= 0xff;
+		return p[0] + '|' + p[1] + '|' + p[2] + '|' + p[3] + '|' + ct.toString('base64');
+	};
+	const w3 = A.encryptChannelMessage(ids.B, { a: 'm', t: 'text', d: 'forge-me', id: 'dddd1111dddd1111' });
+	const w4 = A.encryptChannelMessage(ids.B, { a: 'm', t: 'text', d: 'forge-ahead', id: 'dddd1111dddd1112' });
+	check('E-1: tampered frame via NodeCrypt returns {}',
+		Object.keys(B.decryptPeerMessage(forgeWire(w3), ids.A)).length === 0);
+	const obj3 = B.decryptPeerMessage(w3, ids.A);
+	check('E-1: legitimate frame at same ci still decrypts after forgery',
+		obj3 && obj3.d === 'forge-me');
+	const recvBefore = B.channel[ids.A].ratchet.stats().recvIndex;
+	check('E-1: forged ahead-of-order frame returns {} and recvIndex unchanged',
+		Object.keys(B.decryptPeerMessage(forgeWire(w4), ids.A)).length === 0 &&
+		B.channel[ids.A].ratchet.stats().recvIndex === recvBefore);
+	const obj4 = B.decryptPeerMessage(w4, ids.A);
+	check('E-1: legitimate ahead frame decrypts after its forged twin failed',
+		obj4 && obj4.d === 'forge-ahead');
 }
 
 // ---- 5. E-5: degenerate (all-zero) Curve25519 shared-secret rejection ----
