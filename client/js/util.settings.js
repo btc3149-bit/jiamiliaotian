@@ -635,7 +635,11 @@ function setupSettingsPanel() {
 			showMigrationModal(bytes);
 			window.addSystemMsg && window.addSystemMsg(t('settings.export_creds_done', 'Credentials exported — scan the QR on the new device within 10 minutes.'), true)
 		} catch (err) {
-			window.addSystemMsg && window.addSystemMsg(t('settings.export_failed', 'Export failed: ') + (err && err.message || err), true)
+			if (err && err.message === 'weak-key') {
+				window.addSystemMsg && window.addSystemMsg(t('settings.export_creds_weak', 'Export failed — the migration key is too weak: use at least 12 characters.'), true)
+			} else {
+				window.addSystemMsg && window.addSystemMsg(t('settings.export_failed', 'Export failed: ') + (err && err.message || err), true)
+			}
 		}
 	});
 	const credsFileInput = $('#settings-import-creds-file', settingsContent);

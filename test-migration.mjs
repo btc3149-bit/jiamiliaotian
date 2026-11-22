@@ -13,7 +13,8 @@ import {
 	parseMigrationText,
 	bytesToB64,
 	b64ToBytes,
-	MIGRATION_MAGIC
+	MIGRATION_MAGIC,
+	MIGRATION_KEY_MIN_LEN
 } from './client/js/util.keyExport.js';
 
 let passed = 0;
@@ -108,6 +109,36 @@ check('b64 roundtrip binary-safe (0-255)', (() => {
 	for (let i = 0; i < 256; i++) if (back[i] !== i) return false;
 	return true;
 })());
+
+console.log('=== test-migration: E-2 weak-key enforcement (export side only) ===');
+check('MIGRATION_KEY_MIN_LEN is 12', MIGRATION_KEY_MIN_LEN === 12);
+check('empty key throws weak-key', await encryptMigration(payload, '').catch(e => e.message) === 'weak-key');
+check('11-char key throws weak-key', await encryptMigration(payload, '12345678901').catch(e => e.message) === 'weak-key');
+check('11 code-point emoji key throws weak-key', await encryptMigration(payload, '🔐'.repeat(11)).catch(e => e.message) === 'weak-key');
+check('non-string key throws weak-key', await encryptMigration(payload, 123456789012).catch(e => e.message) === 'weak-key');
+check('null key throws weak-key', await encryptMigration(payload, null).catch(e => e.message) === 'weak-key');
+{
+	const blob12 = await encryptMigration(payload, '123456789012');
+	const back12 = await decryptMigration(blob12, '123456789012', NOW + 1000);
+	check('exactly 12-char key succeeds and roundtrips', back12.roomName === payload.n && back12.password === payload.p && back12.username === payload.u);
+}
+
+console.log('=== test-migration: E-2 legacy weak-key container fixture (v1.9.3, key "x") ===');
+// Fixture generated with UNMODIFIED v1.9.3 code (see audit fixtures-v193.json):
+// ts=1760000000000, key='x', payload roomName=fixture-room /
+// password=fixture-password / username=fixuser. decryptMigration must stay
+// able to open it — the strength check is export-side only.
+// 该 fixture 由未改的 v1.9.3 代码以 1 位口令 'x' 生成；新代码仍须可解。
+const FIXTURE_TS = 1760000000000;
+const FIXTURE_B64 = 'Sk1MVEsBzZ1UkyAHOZ5zKqUIg/PVTxv3kQD21/ZXHvBsMt3qA7BzZGTXoSjCoMMV3/LpLlhfyJzYzvXInQw3rmD6664iQAyfadeFw1TsIEUDWCkpWpW6ALMm9L+xptXSHQRf+bpJubzbGeaj8WYX+1+QI9p8iiAG++JL8zHIAmxxpOHP';
+const fixtureBytes = b64ToBytes(FIXTURE_B64);
+const fixtureBack = await decryptMigration(fixtureBytes, 'x', FIXTURE_TS + 1000);
+check('fixture: roomName matches', fixtureBack.roomName === 'fixture-room');
+check('fixture: password matches', fixtureBack.password === 'fixture-password');
+check('fixture: username matches', fixtureBack.username === 'fixuser');
+check('fixture: ts matches', fixtureBack.ts === FIXTURE_TS);
+check('fixture: wrong key still bad-key', await decryptMigration(fixtureBytes, 'y', FIXTURE_TS + 1000).catch(e => e.message) === 'bad-key');
+check('fixture: expired still expired', await decryptMigration(fixtureBytes, 'x', FIXTURE_TS + 10 * 60 * 1000 + 1).catch(e => e.message) === 'expired');
 
 console.log(`\ntest-migration: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);
