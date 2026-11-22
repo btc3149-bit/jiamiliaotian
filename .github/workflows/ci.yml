@@ -25,6 +25,10 @@ jobs:
       - name: Build client bundle
         run: npm run build
 
+      - name: Install server dependencies (integration tests)
+        working-directory: server
+        run: npm ci --ignore-scripts
+
       - name: Crypto interop & tamper tests
         run: npm test
 

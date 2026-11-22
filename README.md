@@ -19,10 +19,14 @@
 | 能力 | Cloudflare Workers（推荐） | Docker 自托管 |
 |---|---|---|
 | Web Push 离线通知 | ✅ | ❌ 未实现（订阅会被静默忽略） |
+| Web Push 接口（/api/vapid 等） | ✅ | ❌ Node 未实现 /api/vapid 与推送转发：订阅请求经加密通道上报后被静默忽略（无报错、无通知），不是订阅成功但不达 |
 | 已读回执 / 断线补拉 | ✅ | ✅（协议层通用） |
 | 安全响应头（CSP 等） | ✅ | ✅ 已对齐（CSP/Permissions-Policy 等五头与 Workers 逐项一致） |
 | TLS / HSTS | ✅ Cloudflare 边缘 | ⚠️ 镜像仅 HTTP 80，TLS 与 HSTS 由前置反代负责（见下方声明） |
 | 房间分片 / 水平扩展 | ✅ 按 DO 分片 | ❌ 单进程 |
+| 服务器密钥轮换 / 迁移签名 | ✅ 24h 轮换 + 48h 旧钥迁移签名 | ❌ Node 无 24h 轮换与迁移签名：进程启动时生成 RSA 密钥、重启即换钥，已 pin 的客户端会触发密钥不符并断连，须按提示确认重置 pin 后重连；重启 Node 服务 = 全员需重新确认服务器密钥 |
+| 频道名校验 | ✅ 强制房间名 SHA-256 哈希格式 | ✅ 已对齐（均强制房间名 SHA-256 哈希格式） |
+| 过期连接清理 | ✅ 清理时摘频道并广播 | ✅ 已对齐（清理时摘频道并广播，成员列表不含已离线成员） |
 
 > **Docker 部署的 TLS 声明**：Docker 镜像仅提供明文 HTTP（80 端口）。生产环境务必在前面加 TLS 终结反向代理（如 Caddy / Nginx / Cloudflare Tunnel），并由该层做 HTTP→HTTPS 跳转与下发 `Strict-Transport-Security: max-age=31536000; includeSubDomains`；不要直接把 80 端口暴露到公网明文使用。
 
