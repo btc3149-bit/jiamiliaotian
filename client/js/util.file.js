@@ -4,6 +4,7 @@ import { inflate, Deflate } from 'fflate';
 import { showFileUploadModal } from './util.fileUpload.js';
 import { imageFileToCleanFile } from './util.image.js';
 import { t } from './util.i18n.js';
+import { callBridge, hasBridge } from './util.bridge.js';
 // v1.2.0 #17: resume-request validation
 import { sanitizeResumeRequest } from './util.validate.js';
 // v1.7.0 #19: incremental SHA-256 (streaming hash of large files without
@@ -457,8 +458,8 @@ async function handleFilesUpload(files, onSend) {
 	// 服务器零存储意味着整次传输在两端都驻留内存；明确的天花板胜过崩掉的标签页。
 	const bad = validateTransferSizes(Array.from(files).map(f => f.size));
 	if (bad) {
-		if (window.addSystemMsg) {
-			window.addSystemMsg(t('file.too_large', 'Transfer too large — the limit is {limit} per send (everything stays in memory; the server stores nothing).').replace('{limit}', formatFileSize(MAX_TRANSFER_BYTES)), true)
+		if (hasBridge('addSystemMsg')) {
+			callBridge('addSystemMsg', t('file.too_large', 'Transfer too large — the limit is {limit} per send (everything stays in memory; the server stores nothing).').replace('{limit}', formatFileSize(MAX_TRANSFER_BYTES)), true)
 		}
 		return;
 	}
@@ -574,8 +575,8 @@ async function handleFilesUpload(files, onSend) {
 		
 	} catch (error) {
 		console.error('File compression error:', error);
-		if (window.addSystemMsg) {
-			window.addSystemMsg(`Failed to compress files: ${error.message}`);
+		if (hasBridge('addSystemMsg')) {
+			callBridge('addSystemMsg', `Failed to compress files: ${error.message}`);
 		}
 	}
 }
@@ -806,8 +807,8 @@ function handleFileStart(message, isPrivate, roomIdx) {
 	// 只是拒收）。聊天条目照常渲染，并如实标注。
 	if ((typeof compressedSize === 'number' && compressedSize > MAX_TRANSFER_BYTES) ||
 		(typeof originalSize === 'number' && originalSize > MAX_TRANSFER_BYTES)) {
-		if (window.addSystemMsg) {
-			window.addSystemMsg(t('system.file_too_large_incoming', 'Refused "{name}": {size} exceeds this device\'s transfer limit ({limit}).').replace('{name}', fileName || '').replace('{size}', formatFileSize(Math.max(compressedSize || 0, originalSize || 0))).replace('{limit}', formatFileSize(MAX_TRANSFER_BYTES)), true)
+		if (hasBridge('addSystemMsg')) {
+			callBridge('addSystemMsg', t('system.file_too_large_incoming', 'Refused "{name}": {size} exceeds this device\'s transfer limit ({limit}).').replace('{name}', fileName || '').replace('{size}', formatFileSize(Math.max(compressedSize || 0, originalSize || 0))).replace('{limit}', formatFileSize(MAX_TRANSFER_BYTES)), true)
 		}
 		if (window.addOtherMsg) {
 			window.addOtherMsg({
@@ -916,8 +917,8 @@ function handleFileComplete(message) {
 	}
 	const req = sanitizeResumeRequest(fileId, missing, transfer.totalVolumes);
 	if (!req) return;
-	if (window.addSystemMsg) {
-		window.addSystemMsg(t('system.resume_requested', 'Missing {n} part(s) of "{name}" — requesting re-send.').replace('{n}', String(missing.length)).replace('{name}', transfer.fileName || ''), true)
+	if (hasBridge('addSystemMsg')) {
+		callBridge('addSystemMsg', t('system.resume_requested', 'Missing {n} part(s) of "{name}" — requesting re-send.').replace('{n}', String(missing.length)).replace('{name}', transfer.fileName || ''), true)
 	}
 	routeFileMessage(transfer, {
 		type: 'file_resume_req',
@@ -945,7 +946,7 @@ export async function downloadFile(fileId) {
 		}
 	} catch (error) {
 		console.error('Download error:', error);
-		window.addSystemMsg(`Failed to download: ${error.message}`);
+		callBridge('addSystemMsg', `Failed to download: ${error.message}`);
 	}
 }
 
@@ -1057,7 +1058,7 @@ export async function previewFile(fileId) {
 	try {
 		const blob = await getTransferBlob(fileId);
 		if (!blob) {
-			window.addSystemMsg && window.addSystemMsg(t('file.preview_unavailable', 'Preview unavailable — the transfer is not complete or has no data.'), true);
+			callBridge('addSystemMsg', t('file.preview_unavailable', 'Preview unavailable — the transfer is not complete or has no data.'), true);
 			return;
 		}
 		const url = URL.createObjectURL(blob);
@@ -1092,16 +1093,16 @@ export async function previewFile(fileId) {
 			try {
 				const how = await saveBlobAuto(blob, transfer.fileName);
 				if (how === 'none') {
-					window.addSystemMsg && window.addSystemMsg(t('file.save_unsupported', 'This app environment cannot save files — long-press the preview image instead.'), true);
+					callBridge('addSystemMsg', t('file.save_unsupported', 'This app environment cannot save files — long-press the preview image instead.'), true);
 				}
 			} catch (err) {
-				window.addSystemMsg && window.addSystemMsg('Save failed: ' + (err && err.message || err), true);
+				callBridge('addSystemMsg', 'Save failed: ' + (err && err.message || err), true);
 			} finally {
 				saveBtn.disabled = false;
 			}
 		});
 	} catch (error) {
-		window.addSystemMsg && window.addSystemMsg('Preview failed: ' + (error && error.message || error), true);
+		callBridge('addSystemMsg', 'Preview failed: ' + (error && error.message || error), true);
 		if (overlay) overlay.remove();
 	}
 }

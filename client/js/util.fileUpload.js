@@ -10,6 +10,7 @@ import {
 } from './util.dom.js';
 import { formatFileSize } from './util.file.js';
 import { t } from './util.i18n.js';
+import { callBridge, hasBridge } from './util.bridge.js';
 
 // File upload modal state
 // 文件上传模态框状态
@@ -357,8 +358,8 @@ async function handleSendFiles() {
 		
 	} catch (error) {
 		console.error('Error sending files:', error);
-		if (window.addSystemMsg) {
-			window.addSystemMsg(`${t('system.file_send_failed', 'Failed to send files:')} ${error.message}`);
+		if (hasBridge('addSystemMsg')) {
+			callBridge('addSystemMsg', `${t('system.file_send_failed', 'Failed to send files:')} ${error.message}`);
 		}
 	}
 }

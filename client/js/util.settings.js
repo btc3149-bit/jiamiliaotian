@@ -542,7 +542,7 @@ function setupSettingsPanel() {
 	// P3：一键清除所有本地加密历史
 	on(clearHistoryBtn, 'click', () => {
 		const removed = clearAllLocalHistory();
-		window.addSystemMsg && window.addSystemMsg(t('system.history_cleared', 'Local message history cleared (encrypted blobs removed).') + ` [${removed}]`)
+		callBridge('addSystemMsg', t('system.history_cleared', 'Local message history cleared (encrypted blobs removed).') + ` [${removed}]`)
 	});
 	// v1.1.0 #10: send-original toggle (default off = auto compress + EXIF strip)
 	const sendOriginalCheckbox = $('#settings-send-original', settingsContent);
@@ -630,12 +630,12 @@ function setupSettingsPanel() {
 			const payload = buildMigrationPayload(rd.roomName, rd.password || '', rd.myUserName || '', Date.now());
 			const bytes = await encryptMigration(payload, key);
 			showMigrationModal(bytes);
-			window.addSystemMsg && window.addSystemMsg(t('settings.export_creds_done', 'Credentials exported — scan the QR on the new device within 10 minutes.'), true)
+			callBridge('addSystemMsg', t('settings.export_creds_done', 'Credentials exported — scan the QR on the new device within 10 minutes.'), true)
 		} catch (err) {
 			if (err && err.message === 'weak-key') {
-				window.addSystemMsg && window.addSystemMsg(t('settings.export_creds_weak', 'Export failed — the migration key is too weak: use at least 12 characters.'), true)
+				callBridge('addSystemMsg', t('settings.export_creds_weak', 'Export failed — the migration key is too weak: use at least 12 characters.'), true)
 			} else {
-				window.addSystemMsg && window.addSystemMsg(t('settings.export_failed', 'Export failed: ') + (err && err.message || err), true)
+				callBridge('addSystemMsg', t('settings.export_failed', 'Export failed: ') + (err && err.message || err), true)
 			}
 		}
 	});
@@ -653,10 +653,10 @@ function setupSettingsPanel() {
 			const bytes = new Uint8Array(await file.arrayBuffer());
 			const data = await decryptMigration(bytes, key);
 			callBridge('openLoginPrefill', data);
-			window.addSystemMsg && window.addSystemMsg(t('settings.import_creds_done', 'Room credentials imported — review and press ENTER to join.'), true)
+			callBridge('addSystemMsg', t('settings.import_creds_done', 'Room credentials imported — review and press ENTER to join.'), true)
 		} catch (err) {
 			const expired = err && err.message === 'expired';
-			window.addSystemMsg && window.addSystemMsg(expired
+			callBridge('addSystemMsg', expired
 				? t('settings.import_creds_expired', 'Import failed — the migration expired (valid for 10 minutes). Export again.')
 				: t('settings.import_creds_failed', 'Import failed — wrong key or corrupted file.'), true)
 		}
@@ -705,9 +705,9 @@ function setupSettingsPanel() {
 			document.body.appendChild(a);
 			a.click();
 			setTimeout(() => { URL.revokeObjectURL(a.href); a.remove() }, 1000);
-			window.addSystemMsg && window.addSystemMsg(t('settings.export_done', 'Archive exported ({n} messages, {s} file transfer(s) skipped). Guard the file — it is only as safe as where you keep it.').replace('{n}', String(msgs.length)).replace('{s}', String(skipped)), true)
+			callBridge('addSystemMsg', t('settings.export_done', 'Archive exported ({n} messages, {s} file transfer(s) skipped). Guard the file — it is only as safe as where you keep it.').replace('{n}', String(msgs.length)).replace('{s}', String(skipped)), true)
 		} catch (err) {
-			window.addSystemMsg && window.addSystemMsg(t('settings.export_failed', 'Export failed: ') + (err && err.message || err), true)
+			callBridge('addSystemMsg', t('settings.export_failed', 'Export failed: ') + (err && err.message || err), true)
 		}
 	});
 	const importFileInput = $('#settings-import-archive-file', settingsContent);
@@ -749,9 +749,9 @@ function setupSettingsPanel() {
 			// chronological order across merged devices
 			rd.messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 			refreshRoomViews();
-			window.addSystemMsg && window.addSystemMsg(t('settings.import_done', 'Imported {n} message(s) ({d} duplicate(s) skipped).').replace('{n}', String(toAppend.length)).replace('{d}', String(dup)), true)
+			callBridge('addSystemMsg', t('settings.import_done', 'Imported {n} message(s) ({d} duplicate(s) skipped).').replace('{n}', String(toAppend.length)).replace('{d}', String(dup)), true)
 		} catch (err) {
-			window.addSystemMsg && window.addSystemMsg(t('settings.import_failed', 'Import failed — wrong password, wrong room, or corrupted file.'), true)
+			callBridge('addSystemMsg', t('settings.import_failed', 'Import failed — wrong password, wrong room, or corrupted file.'), true)
 		}
 	});
 	// P1-D: desktop-shell server URL (localhost-bundled client → remote worker).
@@ -773,7 +773,7 @@ function setupSettingsPanel() {
 		let storedRaw = '';
 		try { storedRaw = localStorage.getItem('jmlt_server_url') || ''; } catch (_e) { /* ignore */ }
 		if (raw === storedRaw) {
-			window.addSystemMsg && window.addSystemMsg(t('settings.server_url_unchanged', 'Server URL unchanged — settings are saved automatically, nothing to reload.'), true);
+			callBridge('addSystemMsg', t('settings.server_url_unchanged', 'Server URL unchanged — settings are saved automatically, nothing to reload.'), true);
 			return
 		}
 		if (raw === '') {
